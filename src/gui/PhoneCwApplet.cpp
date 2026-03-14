@@ -559,16 +559,20 @@ void PhoneCwApplet::buildCwPanel()
                 m_model->setCwIambic(on);
         });
 
-        // Pitch steps by 10 Hz (matching SmartSDR)
+        // Pitch steps by 10 Hz (matching SmartSDR).
+        // Read current value from the label so rapid clicks accumulate
+        // correctly without waiting for the radio roundtrip.
         connect(m_pitchDown, &QPushButton::clicked, this, [this]() {
             if (!m_model) return;
-            int hz = qMax(100, m_model->cwPitch() - 10);
+            int hz = qBound(100, m_pitchLabel->text().toInt() - 10, 6000);
             m_model->setCwPitch(hz);
+            m_pitchLabel->setText(QString::number(hz));
         });
         connect(m_pitchUp, &QPushButton::clicked, this, [this]() {
             if (!m_model) return;
-            int hz = qMin(6000, m_model->cwPitch() + 10);
+            int hz = qBound(100, m_pitchLabel->text().toInt() + 10, 6000);
             m_model->setCwPitch(hz);
+            m_pitchLabel->setText(QString::number(hz));
         });
 
         vbox->addLayout(row);

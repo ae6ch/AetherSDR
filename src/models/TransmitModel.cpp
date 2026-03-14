@@ -391,6 +391,7 @@ void TransmitModel::setCwSpeed(int wpm)
 void TransmitModel::setCwPitch(int hz)
 {
     hz = qBound(100, hz, 6000);
+    m_cwPitch = hz;  // update local cache so rapid steppers accumulate
     emit commandReady(QString("cw pitch %1").arg(hz));
 }
 
