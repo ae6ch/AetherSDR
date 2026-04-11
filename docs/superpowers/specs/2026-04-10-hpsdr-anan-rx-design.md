@@ -65,12 +65,18 @@ Only one radio type (FlexRadio or Anan) is active at a time.
 ## New Classes (`src/hpsdr/`)
 
 ### HpsdrDiscovery
-Owns a UDP socket bound to local port **1024** for receiving HPSDR P2 discovery broadcasts.
-Note: port 1024 is a privileged port on Linux/macOS; the process needs `CAP_NET_BIND_SERVICE`
-(Linux) or root (macOS) to bind it. If this proves unworkable, an alternative is to use
-`SO_REUSEPORT` or to send the Start packet from an ephemeral port and receive discovery
-replies there — this should be validated against actual Anan 10E behaviour on hardware before
-implementation.
+Listens for HPSDR P2 discovery broadcasts. The radio broadcasts to UDP port 1024 on the
+local subnet. Binding to port 1024 requires elevated privileges on Linux
+(`CAP_NET_BIND_SERVICE`) and macOS (root), but is unrestricted on Windows.
+
+To avoid requiring elevated privileges on Linux/macOS, `HpsdrDiscovery` will **not** bind
+to port 1024. Instead it will send a discovery request packet from an ephemeral local port
+and listen for the radio's unicast reply on that same ephemeral port — this is how the
+Thetis reference implementation handles non-root operation. This must be validated on
+real Anan 10E hardware before finalising the implementation.
+
+All platform-specific socket options must use `#ifdef Q_OS_WIN` / `Q_OS_LINUX` /
+`Q_OS_DARWIN` guards per the project style guide (never `_WIN32` or `__APPLE__`).
 Parses each packet to extract IP address, MAC address (used as the unique identity key for
 stale detection), firmware version, and board ID. Emits `radioFound(HpsdrRadioInfo)` signals.
 Run in parallel with the existing `RadioDiscovery` from `MainWindow` so both radio types
@@ -146,11 +152,19 @@ from this value. Supported values: 48000, 96000, 192000, 384000, 768000, 1536000
 
 ## Build Dependencies
 
-`HpsdrDsp` requires **FFTW3** for the FFT path. FFTW3 is currently an optional dependency in
-the build system. When `src/hpsdr/` is compiled, FFTW3 must be present; the CMakeLists change
-will add `find_package(FFTW3 REQUIRED)` scoped to the HPSDR target (or gate the entire
-`src/hpsdr/` subdirectory on `FFTW3_FOUND` and disable it with a status message if absent).
-No other new dependencies are introduced.
+`HpsdrDsp` requires **FFTW3** for the FFT path. FFTW3 is already provisioned on all three
+supported platforms:
+
+- **Linux:** installed via the CI Docker image (same package used by the existing NR4 path)
+- **macOS:** installed via `brew install fftw` (already listed in build instructions)
+- **Windows:** fetched by the existing `setup-fftw.ps1` script; `libfftw3-3.dll` is already
+  bundled in the Windows installer
+
+The CMakeLists change will gate `src/hpsdr/` on `FFTW3_FOUND` and emit a status message if
+absent. No new platform setup steps are required.
+
+No other new dependencies are introduced. All new code must compile and run correctly on
+Linux, macOS, and Windows — the three platforms covered by CI.
 
 ---
 
