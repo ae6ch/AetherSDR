@@ -10,10 +10,14 @@ HpsdrDiscovery::HpsdrDiscovery(QObject* parent) : QObject(parent) {
     connect(&m_socket,     &QUdpSocket::readyRead, this, &HpsdrDiscovery::onReadyRead);
     connect(&m_pollTimer,  &QTimer::timeout,       this, &HpsdrDiscovery::onPollTimer);
     connect(&m_staleTimer, &QTimer::timeout,       this, &HpsdrDiscovery::onStaleTimer);
-    m_staleTimer.setInterval(2000);
+    m_staleTimer.setInterval(POLL_INTERVAL_MS);
 }
 
 void HpsdrDiscovery::startListening() {
+    if (m_socket.state() != QAbstractSocket::UnconnectedState) {
+        qCWarning(lcHpsdr) << "HpsdrDiscovery: startListening() called while already active";
+        return;
+    }
     // Bind to ephemeral port — avoids needing root/CAP_NET_BIND_SERVICE for port <1024
     if (!m_socket.bind(QHostAddress::AnyIPv4, 0)) {
         qCWarning(lcHpsdr) << "HpsdrDiscovery: bind failed:" << m_socket.errorString();
@@ -46,10 +50,10 @@ void HpsdrDiscovery::onReadyRead() {
     while (m_socket.hasPendingDatagrams()) {
         QNetworkDatagram dg = m_socket.receiveDatagram();
         const QByteArray data = dg.data();
-        if (data.size() < 60) continue;
+        if (data.size() < 63) continue;  // P2 discovery reply is 63 bytes
         if (static_cast<quint8>(data[0]) != 0xEF) continue;
         if (static_cast<quint8>(data[1]) != 0xFE) continue;
-        if (static_cast<quint8>(data[3]) == 0x00) continue;  // skip our own requests
+        if (static_cast<quint8>(data[3]) == 0x00) continue;  // skip own requests: radio replies have non-zero board ID at [3]; data[2] is 0x02 in both request and reply
 
         HpsdrRadioInfo info = parseDiscoveryReply(data);
         info.address = dg.senderAddress();

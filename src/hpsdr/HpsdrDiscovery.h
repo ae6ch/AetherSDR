@@ -1,6 +1,6 @@
+#pragma once
 // src/hpsdr/HpsdrDiscovery.h
 // Discovers HPSDR radios on the LAN via OpenHPSDR P2 UDP broadcast.
-#pragma once
 #include "HpsdrRadioInfo.h"
 #include <QObject>
 #include <QUdpSocket>
