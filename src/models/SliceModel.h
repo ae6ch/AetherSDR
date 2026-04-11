@@ -21,6 +21,7 @@ class SliceModel : public QObject {
 
 public:
     explicit SliceModel(int id, QObject* parent = nullptr);
+    ~SliceModel() override = default;
 
     // Getters
     int     sliceId()    const { return m_id; }
@@ -90,10 +91,10 @@ public:
     int     fmDeviation()         const { return m_fmDeviation; }
 
     // Setters (emit signals AND send radio commands)
-    void setFrequency(double mhz);           // slice tune autopan=0 — no recenter
+    virtual void setFrequency(double mhz);           // slice tune autopan=0 — no recenter
     void tuneAndRecenter(double mhz);      // slice tune — recenters pan (band changes)
-    void setMode(const QString& mode);
-    void setFilterWidth(int low, int high);
+    virtual void setMode(const QString& mode);
+    virtual void setFilterWidth(int low, int high);
     void setAudioGain(float gain);
     void setRfGain(float gain);
     void setAudioPan(int pan);
