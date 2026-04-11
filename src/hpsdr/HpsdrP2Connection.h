@@ -29,6 +29,7 @@ signals:
 private slots:
     void onReadyRead();
     void onControlTimer();
+    void onWatchdogTimeout();   // emits connectionLost() when radio stops sending IQ
 
 private:
     void sendStartPacket();
@@ -36,8 +37,13 @@ private:
     void sendControlPacket();
     QByteArray buildControlPacket() const;
 
+    // If no IQ packet arrives within kWatchdogMs, the radio has gone away.
+    // Set conservatively: 384kHz ÷ ~504 bytes/pkt ≈ 762 pkts/sec; 3s = ~2286 missed.
+    static constexpr int kWatchdogMs = 3000;
+
     QUdpSocket            m_socket;
     QTimer                m_controlTimer;
+    QTimer                m_watchdogTimer;
     QHostAddress          m_radioAddress;
     quint32               m_seqNum{0};  // event-loop only; not shared across threads (unlike m_rxFreqHz/m_sampleRate)
     std::atomic<double>   m_rxFreqHz{14225000.0};

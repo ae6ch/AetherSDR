@@ -10,9 +10,12 @@ static constexpr int     kControlIntervalMs = 1;
 
 HpsdrP2Connection::HpsdrP2Connection(QObject* parent) : QObject(parent)
 {
-    connect(&m_socket,       &QUdpSocket::readyRead, this, &HpsdrP2Connection::onReadyRead);
-    connect(&m_controlTimer, &QTimer::timeout,       this, &HpsdrP2Connection::onControlTimer);
+    connect(&m_socket,        &QUdpSocket::readyRead, this, &HpsdrP2Connection::onReadyRead);
+    connect(&m_controlTimer,  &QTimer::timeout,       this, &HpsdrP2Connection::onControlTimer);
+    connect(&m_watchdogTimer, &QTimer::timeout,       this, &HpsdrP2Connection::onWatchdogTimeout);
     m_controlTimer.setInterval(kControlIntervalMs);
+    m_watchdogTimer.setInterval(kWatchdogMs);
+    m_watchdogTimer.setSingleShot(true);
 }
 
 HpsdrP2Connection::~HpsdrP2Connection()
@@ -35,6 +38,7 @@ bool HpsdrP2Connection::connectToRadio(const HpsdrRadioInfo& info)
     m_seqNum  = 0;
     sendStartPacket();
     m_controlTimer.start();
+    m_watchdogTimer.start();
     qCInfo(lcHpsdr) << "P2Connection: started, local port" << m_socket.localPort()
                     << "-> radio" << m_radioAddress.toString();
     return true;
@@ -45,6 +49,7 @@ void HpsdrP2Connection::disconnectFromRadio()
     if (!m_running) {
         return;
     }
+    m_watchdogTimer.stop();
     m_controlTimer.stop();
     sendStopPacket();
     m_socket.close();
@@ -147,8 +152,27 @@ void HpsdrP2Connection::onReadyRead()
         // Each sample = 6 bytes: 3 bytes I (24-bit signed big-endian) + 3 bytes Q.
         // Verify header size in Thetis protocol2.cs ProcessPacket()
         constexpr int kHeaderSize = 8;
+
+        // Reset the watchdog — radio is alive.
+        m_watchdogTimer.start();
+
         emit iqReady(data.mid(kHeaderSize));
     }
+}
+
+void HpsdrP2Connection::onWatchdogTimeout()
+{
+    if (!m_running) {
+        return;
+    }
+    qCWarning(lcHpsdr) << "HpsdrP2Connection: watchdog expired — no IQ received in"
+                       << kWatchdogMs << "ms; radio assumed lost";
+    // Stop timers and socket before emitting so the caller can safely
+    // call disconnectFromRadio() from the connected slot.
+    m_controlTimer.stop();
+    m_socket.close();
+    m_running = false;
+    emit connectionLost();
 }
 
 } // namespace AetherSDR

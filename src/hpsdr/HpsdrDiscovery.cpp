@@ -50,14 +50,16 @@ void HpsdrDiscovery::onReadyRead() {
     while (m_socket.hasPendingDatagrams()) {
         QNetworkDatagram dg = m_socket.receiveDatagram();
         const QByteArray data = dg.data();
-        if (data.size() < 63) continue;  // P2 discovery reply is 63 bytes
-        if (static_cast<quint8>(data[0]) != 0xEF) continue;
-        if (static_cast<quint8>(data[1]) != 0xFE) continue;
-        if (static_cast<quint8>(data[3]) == 0x00) continue;  // skip own requests: radio replies have non-zero board ID at [3]; data[2] is 0x02 in both request and reply
+        // P2 discovery reply is exactly 63 bytes; skip own requests (board ID 0).
+        if (data.size() < 63) { continue; }
+        if (static_cast<quint8>(data[0]) != 0xEF) { continue; }
+        if (static_cast<quint8>(data[1]) != 0xFE) { continue; }
+        // data[2] is 0x02 in both request and reply; board ID at [3] is 0x00 in own requests.
+        if (static_cast<quint8>(data[3]) == 0x00) { continue; }
 
         HpsdrRadioInfo info = parseDiscoveryReply(data);
         info.address = dg.senderAddress();
-        if (info.mac.isEmpty()) continue;
+        if (info.mac.isEmpty()) { continue; }
 
         bool isNew = !m_lastSeen.contains(info.mac);
         m_lastSeen[info.mac] = QDateTime::currentMSecsSinceEpoch();
