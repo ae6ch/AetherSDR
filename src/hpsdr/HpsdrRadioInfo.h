@@ -6,15 +6,18 @@ namespace AetherSDR {
 
 struct HpsdrRadioInfo {
     QHostAddress address;
-    QString      mac;           // unique key for stale detection
-    quint8       boardId{0};    // P2 board ID — Anan 10E value from Thetis protocol2.cs
+    QString      mac;              // unique key for stale detection
+    quint8       boardId{0};       // hardware board ID (see discovery byte offsets below)
     quint8       fwMajor{0};
     quint8       fwMinor{0};
     quint8       numReceivers{1};
+    // Protocol version detected from the discovery reply:
+    //   1 = OpenHPSDR Protocol 1 / Metis (older Hermes, Anan 10E P1 firmware)
+    //   2 = OpenHPSDR Protocol 2 / Thetis (Anan 10E P2 firmware, board ID >= 2)
+    quint8       protocolVersion{1};
 
-    // TODO: switch on boardId for multi-board support (Hermes, Red Pitaya, etc.)
     QString displayName() const {
-        return QString("Anan (HPSDR) — %1").arg(address.toString());
+        return QString("Anan (HPSDR P%1) — %2").arg(protocolVersion).arg(address.toString());
     }
 };
 

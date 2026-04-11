@@ -1,5 +1,7 @@
 // src/hpsdr/HpsdrRadio.cpp
 #include "HpsdrRadio.h"
+#include "HpsdrConnection.h"
+#include "HpsdrP1Connection.h"
 #include "HpsdrP2Connection.h"
 #include "HpsdrDsp.h"
 #include "HpsdrSliceModel.h"
@@ -10,31 +12,18 @@ namespace AetherSDR {
 
 HpsdrRadio::HpsdrRadio(QObject* parent)
     : QObject(parent)
-    , m_conn(std::make_unique<HpsdrP2Connection>())
     , m_dsp(std::make_unique<HpsdrDsp>())
-    , m_slice(std::make_unique<HpsdrSliceModel>(m_conn.get(), m_dsp.get()))
+    , m_slice(std::make_unique<HpsdrSliceModel>(nullptr, m_dsp.get()))
 {
-    // Move DSP to its own thread. m_conn and m_slice stay on the caller's
-    // (main) thread. The iqReady → processIq connection below crosses the
-    // thread boundary and will be auto-queued.
+    // Move DSP to its own thread; m_slice stays on the caller (main) thread.
+    // The concrete m_conn is created in connectToRadio() once the protocol version
+    // is known.  m_conn signals are wired there too.
     m_dspThread.setObjectName("HpsdrDspThread");
     m_dsp->moveToThread(&m_dspThread);
 
-    // IQ from connection (main thread) → DSP processing (DSP thread).
-    // Qt auto-detects the thread boundary and uses QueuedConnection.
-    connect(m_conn.get(), &HpsdrP2Connection::iqReady,
-            m_dsp.get(),  &HpsdrDsp::processIq);
-
     // DSP output (DSP thread) → forwarded signals on HpsdrRadio (main thread).
-    connect(m_dsp.get(), &HpsdrDsp::fftReady,
-            this,         &HpsdrRadio::fftReady);
-
-    connect(m_dsp.get(), &HpsdrDsp::pcmReady,
-            this,         &HpsdrRadio::pcmReady);
-
-    // Connection-lost notification (main thread → main thread, direct).
-    connect(m_conn.get(), &HpsdrP2Connection::connectionLost,
-            this,          &HpsdrRadio::onConnectionLost);
+    connect(m_dsp.get(), &HpsdrDsp::fftReady, this, &HpsdrRadio::fftReady);
+    connect(m_dsp.get(), &HpsdrDsp::pcmReady, this, &HpsdrRadio::pcmReady);
 }
 
 HpsdrRadio::~HpsdrRadio()
@@ -49,9 +38,29 @@ bool HpsdrRadio::connectToRadio(const HpsdrRadioInfo& info)
         return false;
     }
 
+    // Create the protocol-appropriate connection object.
+    // P1 = Metis/Hermes firmware; P2 = OpenHPSDR Protocol 2 / Thetis firmware.
+    if (info.protocolVersion == 1) {
+        m_conn = std::make_unique<HpsdrP1Connection>();
+        qCInfo(lcHpsdr) << "HpsdrRadio: using Protocol 1 (Metis) connection";
+    } else {
+        m_conn = std::make_unique<HpsdrP2Connection>();
+        qCInfo(lcHpsdr) << "HpsdrRadio: using Protocol 2 connection";
+    }
+
+    // Wire IQ and watchdog signals from the new connection.
+    // iqReady crosses the thread boundary (conn on main, DSP on m_dspThread) —
+    // Qt auto-queues it.
+    connect(m_conn.get(), &HpsdrConnection::iqReady,
+            m_dsp.get(),  &HpsdrDsp::processIq);
+    connect(m_conn.get(), &HpsdrConnection::connectionLost,
+            this,          &HpsdrRadio::onConnectionLost);
+
+    // Give the slice model access to the new connection for frequency routing.
+    m_slice->setConnection(m_conn.get());
+
     // Read sample rate from persistent settings.
-    // Default 384000 matches the Anan 10E maximum and P2Connection default.
-    // (v1.4.0.0 firmware note does not apply here — Anan uses its own protocol)
+    // Default 384000 matches the Anan 10E maximum and both P1/P2 driver defaults.
     AppSettings& settings = AppSettings::instance();
     bool convOk = false;
     int sampleRate = settings.value("HpsdrSampleRate", "384000").toInt(&convOk);
@@ -72,6 +81,8 @@ bool HpsdrRadio::connectToRadio(const HpsdrRadioInfo& info)
         qCWarning(lcHpsdr) << "HpsdrRadio:" << errMsg;
         m_dspThread.quit();
         m_dspThread.wait();
+        m_slice->setConnection(nullptr);
+        m_conn.reset();
         emit connectionError(errMsg);
         return false;
     }
@@ -79,7 +90,7 @@ bool HpsdrRadio::connectToRadio(const HpsdrRadioInfo& info)
     m_connected = true;
     emit connected();
     qCInfo(lcHpsdr) << "HpsdrRadio: connected to" << info.displayName()
-                    << "sample rate" << sampleRate;
+                    << "(P" << info.protocolVersion << ") sample rate" << sampleRate;
     return true;
 }
 
@@ -92,9 +103,13 @@ void HpsdrRadio::disconnectFromRadio()
 
     m_conn->disconnectFromRadio();
 
-    // Stop the DSP thread gracefully.
+    // Stop the DSP thread gracefully before destroying the connection,
+    // so no in-flight iqReady signals can reach the stopped DSP.
     m_dspThread.quit();
     m_dspThread.wait();
+
+    m_slice->setConnection(nullptr);
+    m_conn.reset();
 
     emit disconnected();
     qCInfo(lcHpsdr) << "HpsdrRadio: disconnected";
@@ -108,8 +123,12 @@ void HpsdrRadio::onConnectionLost()
     qCWarning(lcHpsdr) << "HpsdrRadio: connection lost (radio stopped responding)";
     m_connected = false;
 
+    // DSP thread must stop before m_conn is destroyed.
     m_dspThread.quit();
     m_dspThread.wait();
+
+    m_slice->setConnection(nullptr);
+    m_conn.reset();
 
     emit disconnected();
 }

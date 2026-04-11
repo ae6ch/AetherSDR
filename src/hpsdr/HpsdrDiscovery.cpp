@@ -50,12 +50,17 @@ void HpsdrDiscovery::onReadyRead() {
     while (m_socket.hasPendingDatagrams()) {
         QNetworkDatagram dg = m_socket.receiveDatagram();
         const QByteArray data = dg.data();
-        // P2 discovery reply is exactly 63 bytes; skip own requests (board ID 0).
+        // Discovery replies are 63 bytes for both P1 and P2.
         if (data.size() < 63) { continue; }
         if (static_cast<quint8>(data[0]) != 0xEF) { continue; }
         if (static_cast<quint8>(data[1]) != 0xFE) { continue; }
-        // data[2] is 0x02 in both request and reply; board ID at [3] is 0x00 in own requests.
-        if (static_cast<quint8>(data[3]) == 0x00) { continue; }
+        // MAC address sits at bytes [4..9] in both P1 and P2 layouts.
+        // Our own broadcast has all zeros there — skip it.
+        bool ownBroadcast = true;
+        for (int i = 4; i <= 9; ++i) {
+            if (static_cast<quint8>(data[i]) != 0x00) { ownBroadcast = false; break; }
+        }
+        if (ownBroadcast) { continue; }
 
         HpsdrRadioInfo info = parseDiscoveryReply(data);
         info.address = dg.senderAddress();
@@ -72,14 +77,11 @@ void HpsdrDiscovery::onReadyRead() {
 }
 
 HpsdrRadioInfo HpsdrDiscovery::parseDiscoveryReply(const QByteArray& data) const {
-    // Byte layout verified against Thetis protocol2.cs → ProcessDiscoveryData():
-    //   [3]     = board ID
-    //   [4..9]  = MAC address (6 bytes)
-    //   [10]    = firmware major version
-    //   [11]    = number of receivers
-    //   [12]    = firmware minor version
+    // MAC is at bytes [4..9] in both P1 (Metis) and P2 (OpenHPSDR Protocol 2).
+    // Verified against:
+    //   P1: OpenHPSDR Metis bootloader spec (openhpsdr.org wiki)
+    //   P2: Thetis protocol2.cs → ProcessDiscoveryData()
     HpsdrRadioInfo info;
-    info.boardId = static_cast<quint8>(data[3]);
     info.mac = QString("%1:%2:%3:%4:%5:%6")
         .arg(static_cast<quint8>(data[4]), 2, 16, QChar('0'))
         .arg(static_cast<quint8>(data[5]), 2, 16, QChar('0'))
@@ -87,9 +89,32 @@ HpsdrRadioInfo HpsdrDiscovery::parseDiscoveryReply(const QByteArray& data) const
         .arg(static_cast<quint8>(data[7]), 2, 16, QChar('0'))
         .arg(static_cast<quint8>(data[8]), 2, 16, QChar('0'))
         .arg(static_cast<quint8>(data[9]), 2, 16, QChar('0'));
-    info.fwMajor      = static_cast<quint8>(data[10]);
-    info.numReceivers = static_cast<quint8>(data[11]);
-    info.fwMinor      = static_cast<quint8>(data[12]);
+
+    // Distinguish P1 from P2 by data[3]:
+    //   P2: data[3] = board ID — always >= 2 for known P2 hardware
+    //       (1=Hermes P2, 6=Anan10E P2, 7=Angelia, 10=Orion, 11=Orion2)
+    //   P1: data[3] = status byte (0=idle, 1=in use by another host)
+    // Board ID 1 (Hermes in P2) is ambiguous with P1 in-use status=1;
+    // we treat >= 2 as unambiguously P2.  Hermes P2 users running data[3]==1
+    // will fall through to P1 handling which still discovers the radio.
+    if (static_cast<quint8>(data[3]) >= 2) {
+        // OpenHPSDR Protocol 2 — Thetis protocol2.cs ProcessDiscoveryData()
+        info.protocolVersion = 2;
+        info.boardId         = static_cast<quint8>(data[3]);
+        info.fwMajor         = static_cast<quint8>(data[10]);
+        info.numReceivers    = static_cast<quint8>(data[11]);
+        info.fwMinor         = static_cast<quint8>(data[12]);
+    } else {
+        // OpenHPSDR Protocol 1 / Metis — openhpsdr.org Metis bootloader spec
+        //   [3]  = status (ignored here; used to flag in-use by another host)
+        //   [10] = firmware code version
+        //   [20] = board ID (0=Metis, 1=Hermes, 2=Griffin, 4=Angelia,
+        //                    5=Orion, 6=HermesLite)
+        info.protocolVersion = 1;
+        info.fwMajor         = static_cast<quint8>(data[10]);
+        info.boardId         = (data.size() > 20) ? static_cast<quint8>(data[20]) : 0;
+        info.numReceivers    = 1;  // P1 radios present a single RX stream
+    }
     return info;
 }
 

@@ -8,7 +8,7 @@ namespace AetherSDR {
 static constexpr quint16 kHpsdrRadioPort   = 1024;  // OpenHPSDR P2: radio listens on UDP 1024
 static constexpr int     kControlIntervalMs = 1;
 
-HpsdrP2Connection::HpsdrP2Connection(QObject* parent) : QObject(parent)
+HpsdrP2Connection::HpsdrP2Connection(QObject* parent) : HpsdrConnection(parent)
 {
     connect(&m_socket,        &QUdpSocket::readyRead, this, &HpsdrP2Connection::onReadyRead);
     connect(&m_controlTimer,  &QTimer::timeout,       this, &HpsdrP2Connection::onControlTimer);

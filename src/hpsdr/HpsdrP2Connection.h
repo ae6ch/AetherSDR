@@ -1,8 +1,8 @@
 #pragma once
 // src/hpsdr/HpsdrP2Connection.h
-// Manages the OpenHPSDR P2 UDP connection: start/stop, control packets, IQ reception.
-#include "HpsdrRadioInfo.h"
-#include <QObject>
+// OpenHPSDR Protocol 2 UDP connection: start/stop, control packets, IQ reception.
+// Implements HpsdrConnection; HpsdrRadio selects this when protocolVersion == 2.
+#include "HpsdrConnection.h"
 #include <QUdpSocket>
 #include <QTimer>
 #include <QHostAddress>
@@ -10,21 +10,18 @@
 
 namespace AetherSDR {
 
-class HpsdrP2Connection : public QObject {
+class HpsdrP2Connection : public HpsdrConnection {
     Q_OBJECT
 public:
     explicit HpsdrP2Connection(QObject* parent = nullptr);
     ~HpsdrP2Connection() override;
 
-    bool connectToRadio(const HpsdrRadioInfo& info);
-    void disconnectFromRadio();  // Named to avoid shadowing QObject::disconnect()
+    bool connectToRadio(const HpsdrRadioInfo& info) override;
+    void disconnectFromRadio() override;  // Named to avoid shadowing QObject::disconnect()
 
-    void setRxFrequency(double hz);   // atomic — safe from main thread
-    void setSampleRate(quint32 rate); // atomic — safe from main thread
-
-signals:
-    void iqReady(QByteArray samples);  // raw 24-bit IQ, big-endian, I then Q per sample
-    void connectionLost();
+    void setRxFrequency(double hz) override;   // atomic — safe from main thread
+    void setSampleRate(quint32 rate) override; // atomic — safe from main thread
+    // signals iqReady and connectionLost inherited from HpsdrConnection
 
 private slots:
     void onReadyRead();

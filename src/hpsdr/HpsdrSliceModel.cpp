@@ -1,6 +1,6 @@
 // src/hpsdr/HpsdrSliceModel.cpp
 #include "HpsdrSliceModel.h"
-#include "HpsdrP2Connection.h"
+#include "HpsdrConnection.h"
 #include "HpsdrDsp.h"
 #include "core/LogManager.h"
 
@@ -8,7 +8,7 @@ namespace AetherSDR {
 
 static constexpr double kHzPerMhz = 1.0e6;
 
-HpsdrSliceModel::HpsdrSliceModel(HpsdrP2Connection* conn, HpsdrDsp* dsp,
+HpsdrSliceModel::HpsdrSliceModel(HpsdrConnection* conn, HpsdrDsp* dsp,
                                   QObject* parent)
     : SliceModel(0, parent), m_conn(conn), m_dsp(dsp)
 {

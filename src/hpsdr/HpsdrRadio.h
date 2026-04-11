@@ -1,6 +1,6 @@
 #pragma once
 // src/hpsdr/HpsdrRadio.h
-// Coordinator that owns HpsdrP2Connection, HpsdrDsp, and HpsdrSliceModel.
+// Coordinator that owns a HpsdrConnection (P1 or P2), HpsdrDsp, and HpsdrSliceModel.
 // Manages connection lifecycle and DSP thread.
 //
 // Threading model:
@@ -8,6 +8,9 @@
 //   m_conn and m_slice live on the caller (main) thread.
 //   Signals between m_conn and m_dsp cross the thread boundary via
 //   Qt::QueuedConnection (auto-queued because they live on different threads).
+//
+// m_conn is created lazily in connectToRadio() as either HpsdrP1Connection or
+// HpsdrP2Connection based on HpsdrRadioInfo::protocolVersion.
 
 #include "HpsdrRadioInfo.h"
 #include <QObject>
@@ -17,7 +20,7 @@
 
 namespace AetherSDR {
 
-class HpsdrP2Connection;
+class HpsdrConnection;  // abstract base; P1 or P2 concrete type selected at connect time
 class HpsdrDsp;
 class HpsdrSliceModel;
 
@@ -28,6 +31,7 @@ public:
     ~HpsdrRadio() override;
 
     // Attempt to connect and start RX streaming.
+    // Creates the protocol-appropriate connection (P1 or P2) based on info.protocolVersion.
     // Returns false if the connection could not be established.
     // Emits connected() on success, connectionError() on failure.
     bool connectToRadio(const HpsdrRadioInfo& info);
@@ -35,7 +39,7 @@ public:
     // Stop streaming and release the UDP socket.
     void disconnectFromRadio();
 
-    // The slice model for this radio (valid after connectToRadio() succeeds).
+    // The slice model for this radio (always valid; wired to the active connection).
     HpsdrSliceModel* sliceModel() const { return m_slice.get(); }
 
 signals:
@@ -53,11 +57,11 @@ private slots:
     void onConnectionLost();
 
 private:
-    std::unique_ptr<HpsdrP2Connection> m_conn;
-    std::unique_ptr<HpsdrDsp>          m_dsp;
-    std::unique_ptr<HpsdrSliceModel>   m_slice;
-    QThread                            m_dspThread;
-    bool                               m_connected{false};
+    std::unique_ptr<HpsdrConnection>  m_conn;   // null until connectToRadio(); P1 or P2
+    std::unique_ptr<HpsdrDsp>         m_dsp;
+    std::unique_ptr<HpsdrSliceModel>  m_slice;
+    QThread                           m_dspThread;
+    bool                              m_connected{false};
 };
 
 } // namespace AetherSDR

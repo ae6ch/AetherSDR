@@ -707,13 +707,15 @@ if(FFTW3_FOUND)
     # HPSDR / Anan support (requires FFTW3 for on-host DSP)
     target_compile_definitions(AetherSDR PRIVATE HAVE_HPSDR)
     target_sources(AetherSDR PRIVATE
+        src/hpsdr/HpsdrConnection.cpp
         src/hpsdr/HpsdrDiscovery.cpp
+        src/hpsdr/HpsdrP1Connection.cpp
         src/hpsdr/HpsdrP2Connection.cpp
         src/hpsdr/HpsdrDsp.cpp
         src/hpsdr/HpsdrSliceModel.cpp
         src/hpsdr/HpsdrRadio.cpp
     )
-    message(STATUS "HPSDR support enabled (Anan 10E)")
+    message(STATUS "HPSDR support enabled (P1/Metis + P2/Thetis)")
 endif()
 
 
