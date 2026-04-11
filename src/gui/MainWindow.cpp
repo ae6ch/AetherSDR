@@ -4251,7 +4251,7 @@ void MainWindow::onHpsdrConnectRequested(const AetherSDR::HpsdrRadioInfo& info)
     connect(m_hpsdrRadio.get(), &HpsdrRadio::pcmReady,
             m_audio, &AudioEngine::feedHpsdrAudio);
 
-    // On successful connect: update UI and start audio output.
+    // On successful connect: update UI, start audio, and add a VFO widget.
     connect(m_hpsdrRadio.get(), &HpsdrRadio::connected,
             this, [this]() {
         m_connPanel->setStatusText("Connected");
@@ -4260,6 +4260,20 @@ void MainWindow::onHpsdrConnectRequested(const AetherSDR::HpsdrRadioInfo& info)
         m_radioInfoLabel->setText("Anan (HPSDR)");
         m_connStatusLabel->setText("Connected");
         audioStartRx();
+
+        // Add a VFO widget so the user can see and scroll-tune the frequency.
+        // sliceId 0 matches HpsdrSliceModel's constructor argument.
+        // wireVfoWidget() is NOT used — it has SmartSDR-specific connections.
+        // VfoWidget::setSlice() wires frequencyChanged→display and forwards
+        // wheel events directly to HpsdrSliceModel::setFrequency().
+        if (SpectrumWidget* sw = spectrum()) {
+            sw->removeVfoWidget(0);  // idempotent — no-op if not present
+            VfoWidget* vfo = sw->addVfoWidget(0);
+            if (vfo) {
+                vfo->setSlice(m_hpsdrRadio->sliceModel());
+                sw->setActiveVfoWidget(0);
+            }
+        }
     });
 
     // Unexpected loss (radio rebooted, network drop, etc.).
@@ -4285,6 +4299,12 @@ void MainWindow::onHpsdrConnectRequested(const AetherSDR::HpsdrRadioInfo& info)
 
 void MainWindow::onHpsdrDisconnected()
 {
+    // Remove the HPSDR VFO widget before tearing down the radio object —
+    // the VFO holds a SliceModel* that belongs to m_hpsdrRadio.
+    if (SpectrumWidget* sw = spectrum()) {
+        sw->removeVfoWidget(0);
+    }
+
     audioStopRx();
     m_connPanel->setConnected(false);
     m_connPanel->setStatusText("Disconnected");
@@ -5352,6 +5372,16 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // The radio routes the tune to the correct slice for that pan.
     connect(sw, &SpectrumWidget::frequencyClicked,
             this, [this, sw](double mhz) {
+#ifdef HAVE_HPSDR
+        // HPSDR: no SmartSDR pan routing — frequency goes directly to the
+        // HpsdrSliceModel which forwards it to hardware.  The multi-pan
+        // panId/differentPan logic below is SmartSDR-only and would block
+        // onFrequencyChanged from being called when HPSDR is connected.
+        if (m_hpsdrRadio) {
+            onFrequencyChanged(mhz);
+            return;
+        }
+#endif
         // Find the panId for this spectrum widget
         QString panId;
         for (auto* applet : m_panStack->allApplets()) {

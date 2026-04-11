@@ -1373,6 +1373,13 @@ void AudioEngine::feedHpsdrAudio(const QByteArray& pcm)
     // and the m_resampleTo48k path (macOS/Windows 48 kHz-only sinks) is applied.
     // Direct m_audioDevice->write() bypasses both and causes silence or
     // half-speed playback when the sink is not at 24 kHz.
+    static int callCount = 0;
+    if (++callCount <= 5) {
+        qCWarning(lcAudio) << "AudioEngine::feedHpsdrAudio: call" << callCount
+                           << "pcm size" << pcm.size()
+                           << "sink=" << (m_audioSink ? "ok" : "null")
+                           << "resampleTo48k=" << m_resampleTo48k;
+    }
     if (!m_audioSink) {
         return;
     }
