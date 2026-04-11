@@ -143,9 +143,60 @@ void HpsdrDsp::processIq(const QByteArray& raw)
             }
         }
 
-        // ── Audio demod path: added in Task 7 ──
-        Q_UNUSED(iSam)  // suppress unused-variable warnings until Task 7
-        Q_UNUSED(qSam)
+        // ── Audio demod path ──────────────────────────────────────────────
+        // 1. Frequency translate: mix IQ down to baseband at slice frequency
+        float cosP =  std::cos(m_ncoPhase);
+        float sinP =  std::sin(m_ncoPhase);
+        float tI   =  iSam * cosP + qSam * sinP;
+        float tQ   = -iSam * sinP + qSam * cosP;
+        m_ncoPhase += m_ncoPhaseInc;
+        // Wrap phase to [-π, π] to avoid float precision drift
+        if (m_ncoPhase > kPi) { m_ncoPhase -= kTwoPi; }
+
+        // 2. FIR low-pass filter (separate delay lines for I and Q)
+        auto applyFir = [&](QVector<float>& state, float input) -> float {
+            std::copy_backward(state.begin(), state.end() - 1, state.end());
+            state[0] = input;
+            float acc = 0.0f;
+            for (int k = 0; k < m_firCoeffs.size(); ++k) { acc += m_firCoeffs[k] * state[k]; }
+            return acc;
+        };
+        float fI = applyFir(m_firStateI, tI);
+        float fQ = applyFir(m_firStateQ, tQ);
+
+        // 3. Decimate: keep every m_decimRatio-th sample (e.g. 384k → 48k at ratio 8)
+        if (++m_audioAccumPos < m_decimRatio) { continue; }
+        m_audioAccumPos = 0;
+
+        // 4. Demodulate (analytic signal approach):
+        float audio = 0.0f;
+        switch (m_mode.load()) {
+            case 0: audio =  fI + fQ; break;                               // USB: Re(I + jQ)
+            case 1: audio =  fI - fQ; break;                               // LSB: Re(I - jQ)
+            case 2: audio =  std::sqrt(fI * fI + fQ * fQ); break;         // AM: envelope
+            case 3: audio =  fI + fQ; break;                               // CW: USB path (BFO offset applied via NCO)
+            default: break;
+        }
+
+        // 5. Resample 48k → 24k: simple 2-sample average (upgrade to half-band FIR later)
+        m_audio48kBuf.append(audio);
+        if (m_audio48kBuf.size() < 2) { continue; }
+        float s24k = (m_audio48kBuf[0] + m_audio48kBuf[1]) * 0.5f;
+        m_audio48kBuf.clear();
+
+        // 6. float → int16 stereo (mono duplicated to L and R channels)
+        qint16 s16 = static_cast<qint16>(
+            std::clamp(s24k * 32767.0f, -32768.0f, 32767.0f));
+        m_audioOutBuf.append(reinterpret_cast<const char*>(&s16), 2);  // L channel
+        m_audioOutBuf.append(reinterpret_cast<const char*>(&s16), 2);  // R channel
+
+        // 7. Emit in 10 ms chunks: 10ms at 24kHz stereo
+        //    24000 Hz × 10 ms × 2 ch × 2 bytes = 960 bytes = 240 stereo frames × 4 bytes/frame
+        constexpr int kEmitBytes = 240 * 4;
+        if (m_audioOutBuf.size() >= kEmitBytes) {
+            emit pcmReady(m_audioOutBuf.left(kEmitBytes));
+            m_audioOutBuf.remove(0, kEmitBytes);
+        }
     }
 }
 
