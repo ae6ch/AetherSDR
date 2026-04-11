@@ -161,6 +161,13 @@ public slots:
     // Receives stripped PCM from PanadapterStream::audioDataReady().
     void feedAudioData(const QByteArray& pcm);
 
+#ifdef HAVE_HPSDR
+    // Bridge slot: writes HPSDR DSP PCM (int16 stereo 24 kHz) directly to the
+    // output sink, bypassing the FlexRadio NR/DSP pipeline.
+    // startRxStream() must be called before feeding HPSDR audio.
+    void feedHpsdrAudio(const QByteArray& int16Stereo24k);
+#endif
+
 signals:
     void rxStarted();
     void rxStopped();

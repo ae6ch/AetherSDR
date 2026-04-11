@@ -1366,4 +1366,16 @@ void AudioEngine::feedDecodedSpeech(const QByteArray& pcm)
         m_rxBuffer.append(pcm);
 }
 
+#ifdef HAVE_HPSDR
+void AudioEngine::feedHpsdrAudio(const QByteArray& pcm)
+{
+    // Write PCM directly to the output sink, bypassing the NR/DSP pipeline.
+    // Volume and mute are applied at the QAudioSink level (set in startRxStream()).
+    // startRxStream() must be called before feeding HPSDR audio — see HpsdrRadio (Task 10).
+    if (m_audioSink && m_audioSink->state() != QAudio::StoppedState && m_audioDevice) {
+        m_audioDevice->write(pcm);
+    }
+}
+#endif
+
 } // namespace AetherSDR
