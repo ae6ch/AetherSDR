@@ -6,6 +6,15 @@
 
 ---
 
+## Reference Implementation
+
+**Thetis** (https://github.com/ramdor/Thetis) is the open-source C# SDR client for HPSDR
+radios and the direct successor to PowerSDR for Apache Labs hardware. Use it as the
+authoritative reference for P2 packet formats, discovery handshake, control packet layout,
+and IQ data framing. Protocol logic is directly translatable from C# to C++/Qt.
+
+---
+
 ## Background
 
 The Apache Labs Anan 10E is an HF SDR transceiver that uses the **OpenHPSDR Protocol 2 (P2)**,
