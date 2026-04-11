@@ -27,6 +27,7 @@ Q_LOGGING_CATEGORY(lcGui,        "aether.gui",         QtWarningMsg)
 Q_LOGGING_CATEGORY(lcDxCluster,  "aether.dxcluster",   QtWarningMsg)
 Q_LOGGING_CATEGORY(lcRbn,        "aether.rbn",         QtWarningMsg)
 Q_LOGGING_CATEGORY(lcPerf,       "aether.perf",        QtWarningMsg)
+Q_LOGGING_CATEGORY(lcHpsdr,      "aether.hpsdr",       QtWarningMsg)
 
 LogManager::LogManager()
 {
@@ -50,6 +51,7 @@ LogManager::LogManager()
         {"aether.dxcluster",  "DX Cluster",   "DX cluster telnet connection and spot parsing"},
         {"aether.rbn",        "RBN",          "Reverse Beacon Network connection and spots"},
         {"aether.perf",       "Performance",  "Render timing and CPU profiling data"},
+        {"aether.hpsdr",      "HPSDR/Anan",   "HPSDR Protocol 2 discovery, connection, and DSP (Anan radios)"},
     };
 
     // QLoggingCategory objects are defined above via Q_LOGGING_CATEGORY macros.

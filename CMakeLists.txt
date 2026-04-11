@@ -703,6 +703,21 @@ if(FFTW3_FOUND)
             COMMENT "Copying libfftw3-3.dll to build directory"
         )
     endif()
+
+    # HPSDR / Anan support (requires FFTW3 for on-host DSP)
+    target_compile_definitions(AetherSDR PRIVATE HAVE_HPSDR)
+    target_sources(AetherSDR PRIVATE
+        src/hpsdr/HpsdrDiscovery.cpp
+        src/hpsdr/HpsdrP2Connection.cpp
+        src/hpsdr/HpsdrDsp.cpp
+        src/hpsdr/HpsdrSliceModel.cpp
+        src/hpsdr/HpsdrRadio.cpp
+    )
+    message(STATUS "HPSDR support enabled (Anan 10E)")
+endif()
+
+if(NOT FFTW3_FOUND)
+    message(STATUS "FFTW3 not found — HPSDR support disabled")
 endif()
 
 if(RADE_FOUND)
