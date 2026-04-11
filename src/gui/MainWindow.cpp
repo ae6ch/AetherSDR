@@ -54,6 +54,9 @@
 #endif
 #include "AetherDspDialog.h"
 #include "DspParamPopup.h"
+#ifdef HAVE_HPSDR
+#include "hpsdr/HpsdrSliceModel.h"
+#endif
 
 #include <memory>
 #include <functional>
@@ -4773,6 +4776,13 @@ void MainWindow::onSliceRemoved(int id)
 
 SliceModel* MainWindow::activeSlice() const
 {
+#ifdef HAVE_HPSDR
+    // When an HPSDR radio is connected all frequency/mode/filter operations
+    // must go to HpsdrSliceModel, not a FlexRadio SmartSDR slice.
+    if (m_hpsdrRadio) {
+        return m_hpsdrRadio->sliceModel();
+    }
+#endif
     if (m_activeSliceId < 0) return nullptr;
     return m_radioModel.slice(m_activeSliceId);
 }
