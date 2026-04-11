@@ -50,17 +50,23 @@ void HpsdrDiscovery::onReadyRead() {
     while (m_socket.hasPendingDatagrams()) {
         QNetworkDatagram dg = m_socket.receiveDatagram();
         const QByteArray data = dg.data();
-        // Discovery replies are 63 bytes for both P1 and P2.
-        if (data.size() < 63) { continue; }
+
+        // P1 (Metis) replies are 60 bytes; P2 replies are 63 bytes.
+        // Our own discovery broadcast is 63 bytes, so 60-byte packets can
+        // only originate from a radio (no ownBroadcast guard needed for P1).
+        if (data.size() != 60 && data.size() != 63) { continue; }
         if (static_cast<quint8>(data[0]) != 0xEF) { continue; }
         if (static_cast<quint8>(data[1]) != 0xFE) { continue; }
-        // MAC address sits at bytes [4..9] in both P1 and P2 layouts.
-        // Our own broadcast has all zeros there — skip it.
-        bool ownBroadcast = true;
-        for (int i = 4; i <= 9; ++i) {
-            if (static_cast<quint8>(data[i]) != 0x00) { ownBroadcast = false; break; }
+
+        // For 63-byte packets (P2 or our own echo): the MAC is at [4..9].
+        // Our sent broadcast has all zeros there; real P2 replies do not.
+        if (data.size() == 63) {
+            bool ownBroadcast = true;
+            for (int i = 4; i <= 9; ++i) {
+                if (static_cast<quint8>(data[i]) != 0x00) { ownBroadcast = false; break; }
+            }
+            if (ownBroadcast) { continue; }
         }
-        if (ownBroadcast) { continue; }
 
         HpsdrRadioInfo info = parseDiscoveryReply(data);
         info.address = dg.senderAddress();
@@ -70,50 +76,52 @@ void HpsdrDiscovery::onReadyRead() {
         m_lastSeen[info.mac] = QDateTime::currentMSecsSinceEpoch();
         if (isNew) {
             qCInfo(lcHpsdr) << "HpsdrDiscovery: radio found:" << info.displayName()
-                            << "MAC:" << info.mac;
+                            << "MAC:" << info.mac << "P" << info.protocolVersion;
             emit radioFound(info);
         }
     }
 }
 
 HpsdrRadioInfo HpsdrDiscovery::parseDiscoveryReply(const QByteArray& data) const {
-    // MAC is at bytes [4..9] in both P1 (Metis) and P2 (OpenHPSDR Protocol 2).
-    // Verified against:
-    //   P1: OpenHPSDR Metis bootloader spec (openhpsdr.org wiki)
+    // Packet size is the reliable P1/P2 discriminator (confirmed by Wireshark):
+    //   60 bytes → OpenHPSDR Protocol 1 / Metis
+    //   63 bytes → OpenHPSDR Protocol 2 (Thetis)
+    //
+    // P1 layout (60 bytes): [0]=EF [1]=FE [2]=02/03 [3..8]=MAC [9]=fw_version [10]=board_id
+    // P2 layout (63 bytes): [0]=EF [1]=FE [2]=02    [3]=board_id [4..9]=MAC [10]=fwMajor [11]=numRx [12]=fwMinor
+    //
+    // References:
+    //   P1: OpenHPSDR Metis bootloader spec (openhpsdr.org) — MAC at [3..8] confirmed by capture
     //   P2: Thetis protocol2.cs → ProcessDiscoveryData()
     HpsdrRadioInfo info;
-    info.mac = QString("%1:%2:%3:%4:%5:%6")
-        .arg(static_cast<quint8>(data[4]), 2, 16, QChar('0'))
-        .arg(static_cast<quint8>(data[5]), 2, 16, QChar('0'))
-        .arg(static_cast<quint8>(data[6]), 2, 16, QChar('0'))
-        .arg(static_cast<quint8>(data[7]), 2, 16, QChar('0'))
-        .arg(static_cast<quint8>(data[8]), 2, 16, QChar('0'))
-        .arg(static_cast<quint8>(data[9]), 2, 16, QChar('0'));
 
-    // Distinguish P1 from P2 by data[3]:
-    //   P2: data[3] = board ID — always >= 2 for known P2 hardware
-    //       (1=Hermes P2, 6=Anan10E P2, 7=Angelia, 10=Orion, 11=Orion2)
-    //   P1: data[3] = status byte (0=idle, 1=in use by another host)
-    // Board ID 1 (Hermes in P2) is ambiguous with P1 in-use status=1;
-    // we treat >= 2 as unambiguously P2.  Hermes P2 users running data[3]==1
-    // will fall through to P1 handling which still discovers the radio.
-    if (static_cast<quint8>(data[3]) >= 2) {
-        // OpenHPSDR Protocol 2 — Thetis protocol2.cs ProcessDiscoveryData()
+    if (data.size() == 60) {
+        // Protocol 1 / Metis
+        info.protocolVersion = 1;
+        info.mac = QString("%1:%2:%3:%4:%5:%6")
+            .arg(static_cast<quint8>(data[3]), 2, 16, QChar('0'))
+            .arg(static_cast<quint8>(data[4]), 2, 16, QChar('0'))
+            .arg(static_cast<quint8>(data[5]), 2, 16, QChar('0'))
+            .arg(static_cast<quint8>(data[6]), 2, 16, QChar('0'))
+            .arg(static_cast<quint8>(data[7]), 2, 16, QChar('0'))
+            .arg(static_cast<quint8>(data[8]), 2, 16, QChar('0'));
+        info.fwMajor      = static_cast<quint8>(data[9]);
+        info.boardId      = static_cast<quint8>(data[10]);
+        info.numReceivers = 1;  // P1 presents a single RX stream
+    } else {
+        // Protocol 2 — Thetis protocol2.cs ProcessDiscoveryData()
         info.protocolVersion = 2;
         info.boardId         = static_cast<quint8>(data[3]);
-        info.fwMajor         = static_cast<quint8>(data[10]);
-        info.numReceivers    = static_cast<quint8>(data[11]);
-        info.fwMinor         = static_cast<quint8>(data[12]);
-    } else {
-        // OpenHPSDR Protocol 1 / Metis — openhpsdr.org Metis bootloader spec
-        //   [3]  = status (ignored here; used to flag in-use by another host)
-        //   [10] = firmware code version
-        //   [20] = board ID (0=Metis, 1=Hermes, 2=Griffin, 4=Angelia,
-        //                    5=Orion, 6=HermesLite)
-        info.protocolVersion = 1;
-        info.fwMajor         = static_cast<quint8>(data[10]);
-        info.boardId         = (data.size() > 20) ? static_cast<quint8>(data[20]) : 0;
-        info.numReceivers    = 1;  // P1 radios present a single RX stream
+        info.mac = QString("%1:%2:%3:%4:%5:%6")
+            .arg(static_cast<quint8>(data[4]), 2, 16, QChar('0'))
+            .arg(static_cast<quint8>(data[5]), 2, 16, QChar('0'))
+            .arg(static_cast<quint8>(data[6]), 2, 16, QChar('0'))
+            .arg(static_cast<quint8>(data[7]), 2, 16, QChar('0'))
+            .arg(static_cast<quint8>(data[8]), 2, 16, QChar('0'))
+            .arg(static_cast<quint8>(data[9]), 2, 16, QChar('0'));
+        info.fwMajor      = static_cast<quint8>(data[10]);
+        info.numReceivers = static_cast<quint8>(data[11]);
+        info.fwMinor      = static_cast<quint8>(data[12]);
     }
     return info;
 }
