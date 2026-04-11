@@ -4235,11 +4235,12 @@ void MainWindow::onHpsdrConnectRequested(const AetherSDR::HpsdrRadioInfo& info)
 
     // FFT bins → active spectrum display (main thread → main thread, direct).
     // spectrum() is resolved at call time so it tracks pan changes.
+    // bins is moved into feedFftBins to avoid a copy on the 30 fps FFT path.
     connect(m_hpsdrRadio.get(), &HpsdrRadio::fftReady,
             this, [this](quint64 centerHz, float bwHz, QVector<float> bins) {
         SpectrumWidget* sw = spectrum();
         if (sw) {
-            sw->feedFftBins(centerHz, bwHz, bins);
+            sw->feedFftBins(centerHz, bwHz, std::move(bins));
         }
     });
 
@@ -4262,13 +4263,16 @@ void MainWindow::onHpsdrConnectRequested(const AetherSDR::HpsdrRadioInfo& info)
     connect(m_hpsdrRadio.get(), &HpsdrRadio::disconnected,
             this, &MainWindow::onHpsdrDisconnected);
 
-    // Connection establishment failure.
+    // Connection establishment failure (emitted synchronously from connectToRadio).
+    // Defer the reset so the HpsdrRadio object outlives signal delivery even if
+    // this connection is ever changed to queued in the future.
     connect(m_hpsdrRadio.get(), &HpsdrRadio::connectionError,
             this, [this](const QString& msg) {
         m_connPanel->setStatusText("Error: " + msg);
         m_connPanel->setConnected(false);
         statusBar()->showMessage("HPSDR connection error: " + msg, 5000);
-        m_hpsdrRadio.reset();
+        QMetaObject::invokeMethod(this, [this] { m_hpsdrRadio.reset(); },
+                                  Qt::QueuedConnection);
     });
 
     // connectToRadio() emits connected() or connectionError() synchronously on
@@ -4281,6 +4285,8 @@ void MainWindow::onHpsdrDisconnected()
     audioStopRx();
     m_connPanel->setConnected(false);
     m_connPanel->setStatusText("Disconnected");
+    m_connPanel->show();
+    m_connPanel->raise();
     m_connStatusLabel->setText("Disconnected");
     m_radioInfoLabel->setText("");
     // The HpsdrRadio has already cleaned up its thread and connection.

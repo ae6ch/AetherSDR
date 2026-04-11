@@ -29,7 +29,7 @@ public slots:
 
 signals:
     void fftReady(quint64 centerHz, float bandwidthHz, QVector<float> binsDbfs);
-    void pcmReady(QByteArray int16Stereo24k);
+    void pcmReady(const QByteArray& int16Stereo24k);
 
 private:
     void initFft();

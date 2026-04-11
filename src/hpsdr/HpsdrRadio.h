@@ -47,7 +47,7 @@ signals:
     void fftReady(quint64 centerHz, float bandwidthHz, QVector<float> binsDbfs);
 
     // Forwarded from HpsdrDsp — consumed by AudioEngine::feedHpsdrAudio
-    void pcmReady(QByteArray int16Stereo24k);
+    void pcmReady(const QByteArray& int16Stereo24k);
 
 private slots:
     void onConnectionLost();
