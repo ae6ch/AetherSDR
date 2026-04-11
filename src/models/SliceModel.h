@@ -90,9 +90,11 @@ public:
     double  txOffsetFreq()        const { return m_txOffsetFreq; }
     int     fmDeviation()         const { return m_fmDeviation; }
 
-    // Setters (emit signals AND send radio commands)
+    // Setters (emit signals AND send radio commands).
+    // The three below are virtual so HpsdrSliceModel can intercept and route to
+    // HPSDR hardware instead of emitting SmartSDR commandReady strings.
     virtual void setFrequency(double mhz);           // slice tune autopan=0 — no recenter
-    void tuneAndRecenter(double mhz);      // slice tune — recenters pan (band changes)
+    virtual void tuneAndRecenter(double mhz);        // slice tune — recenters pan (band changes)
     virtual void setMode(const QString& mode);
     virtual void setFilterWidth(int low, int high);
     void setAudioGain(float gain);

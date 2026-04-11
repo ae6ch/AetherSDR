@@ -17,10 +17,13 @@ public:
     ~HpsdrSliceModel() override = default;
 
     void setFrequency(double mhz) override;
+    void tuneAndRecenter(double mhz) override;  // same hardware routing as setFrequency
     void setMode(const QString& mode) override;
     void setFilterWidth(int low, int high) override;
 
 private:
+    void routeFrequencyToHardware(double mhz);
+
     HpsdrP2Connection* m_conn{nullptr};  // not owned — owned by HpsdrRadio
     HpsdrDsp*          m_dsp{nullptr};   // not owned — owned by HpsdrRadio
 };
