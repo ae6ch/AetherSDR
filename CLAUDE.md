@@ -115,8 +115,9 @@ Use `ls src/core/`, `ls src/models/`, `ls src/gui/` to explore.
 - `MainWindow` — wires everything together, signal routing hub
 - `PanadapterStream` — VITA-49 UDP parsing, routes FFT/waterfall/audio/meters
 
-**Threading:** 11 threads — see `docs/architecture-pipelines.md` for full
-thread diagram, data flow ASCII art, cross-thread signal map, and GPU rendering notes.
+**Threading:** Up to 13 threads (11 Flex + 2 HPSDR when Anan connected) — see
+`docs/architecture-pipelines.md` for full thread diagram, data flow ASCII art,
+cross-thread signal map, and GPU rendering notes.
 
 **Design principle:** RadioModel owns all sub-models on the main thread.
 Worker threads communicate exclusively via auto-queued signals. Never hold
