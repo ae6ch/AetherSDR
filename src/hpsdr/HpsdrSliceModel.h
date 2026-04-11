@@ -14,14 +14,15 @@ class HpsdrSliceModel : public SliceModel {
 public:
     explicit HpsdrSliceModel(HpsdrP2Connection* conn, HpsdrDsp* dsp,
                              QObject* parent = nullptr);
+    ~HpsdrSliceModel() override = default;
 
     void setFrequency(double mhz) override;
     void setMode(const QString& mode) override;
     void setFilterWidth(int low, int high) override;
 
 private:
-    HpsdrP2Connection* m_conn;  // not owned — owned by HpsdrRadio
-    HpsdrDsp*          m_dsp;   // not owned — owned by HpsdrRadio
+    HpsdrP2Connection* m_conn{nullptr};  // not owned — owned by HpsdrRadio
+    HpsdrDsp*          m_dsp{nullptr};   // not owned — owned by HpsdrRadio
 };
 
 } // namespace AetherSDR

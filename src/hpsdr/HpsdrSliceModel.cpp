@@ -2,6 +2,7 @@
 #include "HpsdrSliceModel.h"
 #include "HpsdrP2Connection.h"
 #include "HpsdrDsp.h"
+#include "core/LogManager.h"
 
 namespace AetherSDR {
 
@@ -18,7 +19,10 @@ HpsdrSliceModel::HpsdrSliceModel(HpsdrP2Connection* conn, HpsdrDsp* dsp,
 
 void HpsdrSliceModel::setFrequency(double mhz)
 {
-    if (isLocked()) { return; }
+    if (isLocked()) {
+        qCDebug(lcHpsdr) << "HpsdrSliceModel: setFrequency ignored — slice is locked";
+        return;
+    }
     // Call base: updates m_frequency, emits frequencyChanged.
     // commandReady is disconnected in constructor so no SmartSDR command fires.
     SliceModel::setFrequency(mhz);
