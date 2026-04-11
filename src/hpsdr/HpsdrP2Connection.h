@@ -1,4 +1,5 @@
 #pragma once
+// Manages the OpenHPSDR P2 UDP connection: start/stop, control packets, IQ reception.
 #include <QObject>
 
 namespace AetherSDR {

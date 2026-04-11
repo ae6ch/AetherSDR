@@ -1,4 +1,5 @@
 #pragma once
+// On-host DSP for HPSDR: complex FFT for spectrum + NCO/FIR/demod for audio.
 #include <QObject>
 
 namespace AetherSDR {

@@ -716,9 +716,6 @@ if(FFTW3_FOUND)
     message(STATUS "HPSDR support enabled (Anan 10E)")
 endif()
 
-if(NOT FFTW3_FOUND)
-    message(STATUS "FFTW3 not found — HPSDR support disabled")
-endif()
 
 if(RADE_FOUND)
     target_compile_definitions(AetherSDR PRIVATE HAVE_RADE HAVE_OPUS IS_BUILDING_RADE_API=1)

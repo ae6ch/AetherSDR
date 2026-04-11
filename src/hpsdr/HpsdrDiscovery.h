@@ -1,4 +1,5 @@
 #pragma once
+// Discovers HPSDR radios on the LAN via OpenHPSDR P2 UDP broadcast.
 #include <QObject>
 
 namespace AetherSDR {

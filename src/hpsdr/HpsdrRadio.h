@@ -1,4 +1,5 @@
 #pragma once
+// Coordinator: owns HpsdrP2Connection, HpsdrDsp, HpsdrSliceModel; manages connection lifecycle.
 #include <QObject>
 
 namespace AetherSDR {

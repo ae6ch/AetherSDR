@@ -12,6 +12,7 @@ struct HpsdrRadioInfo {
     quint8       fwMinor{0};
     quint8       numReceivers{1};
 
+    // TODO: switch on boardId for multi-board support (Hermes, Red Pitaya, etc.)
     QString displayName() const {
         return QString("Anan (HPSDR) — %1").arg(address.toString());
     }

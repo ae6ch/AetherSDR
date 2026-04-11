@@ -3,7 +3,8 @@
 
 namespace AetherSDR {
 
-// Placeholder — will be refactored to integrate with SliceModel in Task 9
+// SliceModel subclass for HPSDR: routes setFrequency/setMode/setFilterWidth to DSP instead of SmartSDR.
+// Task 9 will change the base class from QObject to SliceModel (one-line swap).
 class HpsdrSliceModel : public QObject {
     Q_OBJECT
 public:
