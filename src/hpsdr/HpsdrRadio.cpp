@@ -17,6 +17,7 @@ HpsdrRadio::HpsdrRadio(QObject* parent)
     // Move DSP to its own thread. m_conn and m_slice stay on the caller's
     // (main) thread. The iqReady → processIq connection below crosses the
     // thread boundary and will be auto-queued.
+    m_dspThread.setObjectName("HpsdrDspThread");
     m_dsp->moveToThread(&m_dspThread);
 
     // IQ from connection (main thread) → DSP processing (DSP thread).
@@ -51,7 +52,7 @@ bool HpsdrRadio::connectToRadio(const HpsdrRadioInfo& info)
     // Read sample rate from persistent settings.
     // Default 384000 matches the Anan 10E maximum and P2Connection default.
     // (v1.4.0.0 firmware note does not apply here — Anan uses its own protocol)
-    auto& settings = AppSettings::instance();
+    AppSettings& settings = AppSettings::instance();
     bool convOk = false;
     int sampleRate = settings.value("HpsdrSampleRate", "384000").toInt(&convOk);
     if (!convOk || sampleRate <= 0) {
@@ -67,9 +68,11 @@ bool HpsdrRadio::connectToRadio(const HpsdrRadioInfo& info)
     m_dspThread.start();
 
     if (!m_conn->connectToRadio(info)) {
-        qCWarning(lcHpsdr) << "HpsdrRadio: failed to connect to" << info.address.toString();
+        QString errMsg = QString("Failed to bind UDP socket for %1").arg(info.address.toString());
+        qCWarning(lcHpsdr) << "HpsdrRadio:" << errMsg;
         m_dspThread.quit();
         m_dspThread.wait();
+        emit connectionError(errMsg);
         return false;
     }
 
