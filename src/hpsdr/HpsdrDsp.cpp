@@ -26,7 +26,8 @@ void HpsdrDsp::setSampleRate(int rate)
 {
     m_sampleRate = rate;
     m_decimRatio = rate / 48000;
-    m_fftSkip    = std::max(1, (rate / FFT_SIZE) / FFT_FPS_TARGET);
+    m_fftSkip    = std::max(1, static_cast<int>(std::round(
+                       static_cast<double>(rate) / FFT_SIZE / FFT_FPS_TARGET)));
     computeFirCoeffs();
     updateNco();
     qCInfo(lcHpsdr) << "HpsdrDsp: sample rate set to" << rate
@@ -131,6 +132,8 @@ void HpsdrDsp::processIq(const QByteArray& raw)
             m_fftIn[m_fftAccumPos][1] = qSam * m_window[m_fftAccumPos];
             ++m_fftAccumPos;
         }
+        // Separate if (not else-if): the last sample of a frame both fills the
+        // buffer AND triggers runFft() in the same iteration. This is intentional.
         if (m_fftAccumPos >= FFT_SIZE) {
             m_fftAccumPos = 0;
             ++m_fftSkipCount;
