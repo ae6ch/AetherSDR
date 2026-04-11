@@ -39,7 +39,7 @@ private:
     QUdpSocket            m_socket;
     QTimer                m_controlTimer;
     QHostAddress          m_radioAddress;
-    quint32               m_seqNum{0};
+    quint32               m_seqNum{0};  // event-loop only; not shared across threads (unlike m_rxFreqHz/m_sampleRate)
     std::atomic<double>   m_rxFreqHz{14225000.0};
     std::atomic<quint32>  m_sampleRate{384000};
     bool                  m_running{false};
