@@ -19,16 +19,22 @@ HpsdrSliceModel::HpsdrSliceModel(HpsdrConnection* conn, HpsdrDsp* dsp,
     QObject::disconnect(this, &SliceModel::commandReady, nullptr, nullptr);
 }
 
-// Helper: route a new frequency to both the P2 connection and the DSP engine.
+// Helper: route a new frequency to both the connection and the DSP engine.
 // The base class already guards m_locked and qFuzzyCompare before calling the
 // virtual override, so we do not repeat those checks here.
+//
+// For a single-VFO P1/P2 HPSDR radio the IQ stream is always centred at the
+// tuned frequency, so m_centerHz must track m_rxHz (NCO offset stays zero).
+// Setting both atomics lets the FFT emit the correct center for the waterfall.
 void HpsdrSliceModel::routeFrequencyToHardware(double mhz)
 {
+    const double hz = mhz * kHzPerMhz;
     if (m_conn) {
-        m_conn->setRxFrequency(mhz * kHzPerMhz);
+        m_conn->setRxFrequency(hz);
     }
     if (m_dsp) {
-        m_dsp->setRxFrequency(mhz * kHzPerMhz);
+        m_dsp->setCenterFrequency(hz);  // waterfall center + NCO baseline
+        m_dsp->setRxFrequency(hz);      // NCO offset = rxHz - centerHz = 0
     }
 }
 

@@ -1369,12 +1369,17 @@ void AudioEngine::feedDecodedSpeech(const QByteArray& pcm)
 #ifdef HAVE_HPSDR
 void AudioEngine::feedHpsdrAudio(const QByteArray& pcm)
 {
-    // Write PCM directly to the output sink, bypassing the NR/DSP pipeline.
-    // Volume and mute are applied at the QAudioSink level (set in startRxStream()).
-    // startRxStream() must be called before feeding HPSDR audio — see HpsdrRadio (Task 10).
-    if (m_audioSink && m_audioSink->state() != QAudio::StoppedState
-            && m_audioDevice && m_audioDevice->isOpen()) {
-        m_audioDevice->write(pcm);
+    // Route through m_rxBuffer so the 10 ms pull-timer handles rate control
+    // and the m_resampleTo48k path (macOS/Windows 48 kHz-only sinks) is applied.
+    // Direct m_audioDevice->write() bypasses both and causes silence or
+    // half-speed playback when the sink is not at 24 kHz.
+    if (!m_audioSink) {
+        return;
+    }
+    if (m_resampleTo48k) {
+        m_rxBuffer.append(resampleStereo(pcm));
+    } else {
+        m_rxBuffer.append(pcm);
     }
 }
 #endif
