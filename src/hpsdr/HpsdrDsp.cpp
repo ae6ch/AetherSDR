@@ -151,14 +151,16 @@ void HpsdrDsp::processIq(const QByteArray& raw)
         float tQ   = -iSam * sinP + qSam * cosP;
         m_ncoPhase += m_ncoPhaseInc;
         // Wrap phase to [-π, π] to avoid float precision drift
-        if (m_ncoPhase > kPi) { m_ncoPhase -= kTwoPi; }
+        if (m_ncoPhase >  kPi) { m_ncoPhase -= kTwoPi; }
+        if (m_ncoPhase < -kPi) { m_ncoPhase += kTwoPi; }
 
         // 2. FIR low-pass filter (separate delay lines for I and Q)
         auto applyFir = [&](QVector<float>& state, float input) -> float {
             std::copy_backward(state.begin(), state.end() - 1, state.end());
             state[0] = input;
             float acc = 0.0f;
-            for (int k = 0; k < m_firCoeffs.size(); ++k) { acc += m_firCoeffs[k] * state[k]; }
+            const int taps = static_cast<int>(m_firCoeffs.size());
+            for (int k = 0; k < taps; ++k) { acc += m_firCoeffs[k] * state[k]; }
             return acc;
         };
         float fI = applyFir(m_firStateI, tI);
