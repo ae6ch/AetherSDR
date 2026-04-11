@@ -4274,6 +4274,13 @@ void MainWindow::onHpsdrConnectRequested(const AetherSDR::HpsdrRadioInfo& info)
                 sw->setActiveVfoWidget(0);
             }
         }
+
+        // Hide the SmartSDR AppletPanel — its controls (antenna, filter, TX
+        // frequency, DAX, etc.) all send FlexRadio commands that are irrelevant
+        // when an HPSDR radio is connected.  Restored on disconnect.
+        if (m_appletPanel) {
+            m_appletPanel->hide();
+        }
     });
 
     // Unexpected loss (radio rebooted, network drop, etc.).
@@ -4303,6 +4310,11 @@ void MainWindow::onHpsdrDisconnected()
     // the VFO holds a SliceModel* that belongs to m_hpsdrRadio.
     if (SpectrumWidget* sw = spectrum()) {
         sw->removeVfoWidget(0);
+    }
+
+    // Restore the SmartSDR AppletPanel hidden during HPSDR connection.
+    if (m_appletPanel) {
+        m_appletPanel->show();
     }
 
     audioStopRx();
