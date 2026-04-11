@@ -259,7 +259,8 @@ MainWindow::MainWindow(QWidget* parent)
             m_connPanel, &ConnectionPanel::onHpsdrRadioFound);
     connect(&m_discovery, &RadioDiscovery::hpsdrRadioLost,
             m_connPanel, &ConnectionPanel::onHpsdrRadioLost);
-    // hpsdrConnectRequested handled in Task 11
+    connect(m_connPanel, &ConnectionPanel::hpsdrConnectRequested,
+            this, &MainWindow::onHpsdrConnectRequested);
 #endif
 
     // ── Heartbeat indicator + disconnect detection via TCP ping ─────────
@@ -313,6 +314,12 @@ MainWindow::MainWindow(QWidget* parent)
         s.remove("LastRoutedRadioIp");
         s.save();
         m_radioModel.disconnectFromRadio();
+#ifdef HAVE_HPSDR
+        if (m_hpsdrRadio) {
+            m_hpsdrRadio->disconnectFromRadio();
+            m_hpsdrRadio.reset();
+        }
+#endif
     });
 
     // ── SmartLink ──────────────────────────────────────────────────────────
@@ -4210,6 +4217,77 @@ void MainWindow::onConnectionError(const QString& msg)
     m_connStatusLabel->setText("Error");
     statusBar()->showMessage("Connection error: " + msg, 5000);
 }
+
+// ─── HPSDR (Anan) connect/disconnect ────────────────────────────────────────
+
+#ifdef HAVE_HPSDR
+void MainWindow::onHpsdrConnectRequested(const AetherSDR::HpsdrRadioInfo& info)
+{
+    // Tear down any previous HPSDR session before starting a new one.
+    if (m_hpsdrRadio) {
+        m_hpsdrRadio->disconnectFromRadio();
+        m_hpsdrRadio.reset();
+    }
+
+    m_connPanel->setStatusText("Connecting to Anan…");
+
+    m_hpsdrRadio = std::make_unique<HpsdrRadio>();
+
+    // FFT bins → active spectrum display (main thread → main thread, direct).
+    // spectrum() is resolved at call time so it tracks pan changes.
+    connect(m_hpsdrRadio.get(), &HpsdrRadio::fftReady,
+            this, [this](quint64 centerHz, float bwHz, QVector<float> bins) {
+        SpectrumWidget* sw = spectrum();
+        if (sw) {
+            sw->feedFftBins(centerHz, bwHz, bins);
+        }
+    });
+
+    // Decoded PCM → audio engine (main thread → audio thread, auto-queued).
+    connect(m_hpsdrRadio.get(), &HpsdrRadio::pcmReady,
+            m_audio, &AudioEngine::feedHpsdrAudio);
+
+    // On successful connect: update UI and start audio output.
+    connect(m_hpsdrRadio.get(), &HpsdrRadio::connected,
+            this, [this]() {
+        m_connPanel->setStatusText("Connected");
+        m_connPanel->setConnected(true);
+        m_connPanel->hide();
+        m_radioInfoLabel->setText("Anan (HPSDR)");
+        m_connStatusLabel->setText("Connected");
+        audioStartRx();
+    });
+
+    // Unexpected loss (radio rebooted, network drop, etc.).
+    connect(m_hpsdrRadio.get(), &HpsdrRadio::disconnected,
+            this, &MainWindow::onHpsdrDisconnected);
+
+    // Connection establishment failure.
+    connect(m_hpsdrRadio.get(), &HpsdrRadio::connectionError,
+            this, [this](const QString& msg) {
+        m_connPanel->setStatusText("Error: " + msg);
+        m_connPanel->setConnected(false);
+        statusBar()->showMessage("HPSDR connection error: " + msg, 5000);
+        m_hpsdrRadio.reset();
+    });
+
+    // connectToRadio() emits connected() or connectionError() synchronously on
+    // success/failure — the slots above will fire before this returns.
+    m_hpsdrRadio->connectToRadio(info);
+}
+
+void MainWindow::onHpsdrDisconnected()
+{
+    audioStopRx();
+    m_connPanel->setConnected(false);
+    m_connPanel->setStatusText("Disconnected");
+    m_connStatusLabel->setText("Disconnected");
+    m_radioInfoLabel->setText("");
+    // The HpsdrRadio has already cleaned up its thread and connection.
+    // Release the object last — signals may still be in flight above.
+    m_hpsdrRadio.reset();
+}
+#endif
 
 void MainWindow::syncMemorySpot(int memoryIndex)
 {
