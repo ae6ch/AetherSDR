@@ -69,6 +69,14 @@ void RadioDiscovery::startListening()
     }
 
     qCDebug(lcDiscovery) << "RadioDiscovery: listening on UDP" << DISCOVERY_PORT;
+
+#ifdef HAVE_HPSDR
+    connect(&m_hpsdrDiscovery, &HpsdrDiscovery::radioFound,
+            this, &RadioDiscovery::hpsdrRadioFound, Qt::UniqueConnection);
+    connect(&m_hpsdrDiscovery, &HpsdrDiscovery::radioLost,
+            this, &RadioDiscovery::hpsdrRadioLost, Qt::UniqueConnection);
+    m_hpsdrDiscovery.startListening();
+#endif
 }
 
 void RadioDiscovery::stopListening()
@@ -79,6 +87,9 @@ void RadioDiscovery::stopListening()
     m_receivedAny = false;
     m_staleTimer.stop();
     m_socket.close();
+#ifdef HAVE_HPSDR
+    m_hpsdrDiscovery.stopListening();
+#endif
 }
 
 void RadioDiscovery::onBindRetry()

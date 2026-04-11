@@ -8,6 +8,10 @@
 #include <QString>
 #include <QHostAddress>
 
+#ifdef HAVE_HPSDR
+#include "hpsdr/HpsdrDiscovery.h"
+#endif
+
 namespace AetherSDR {
 
 // Represents a discovered FlexRadio on the network.
@@ -70,6 +74,10 @@ signals:
     void radioDiscovered(const RadioInfo& radio);
     void radioUpdated(const RadioInfo& radio);
     void radioLost(const QString& serial);
+#ifdef HAVE_HPSDR
+    void hpsdrRadioFound(const AetherSDR::HpsdrRadioInfo& info);
+    void hpsdrRadioLost(const QString& mac);
+#endif
 
 private slots:
     void onReadyRead();
@@ -90,6 +98,10 @@ private:
 
     // Track last-seen time per serial for staleness detection
     QMap<QString, qint64> m_lastSeen;
+
+#ifdef HAVE_HPSDR
+    AetherSDR::HpsdrDiscovery m_hpsdrDiscovery;
+#endif
 };
 
 } // namespace AetherSDR

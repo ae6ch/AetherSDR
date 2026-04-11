@@ -254,6 +254,14 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_discovery, &RadioDiscovery::radioLost,
             m_connPanel, &ConnectionPanel::onRadioLost);
 
+#ifdef HAVE_HPSDR
+    connect(&m_discovery, &RadioDiscovery::hpsdrRadioFound,
+            m_connPanel, &ConnectionPanel::onHpsdrRadioFound);
+    connect(&m_discovery, &RadioDiscovery::hpsdrRadioLost,
+            m_connPanel, &ConnectionPanel::onHpsdrRadioLost);
+    // hpsdrConnectRequested handled in Task 11
+#endif
+
     // ── Heartbeat indicator + disconnect detection via TCP ping ─────────
     m_heartbeatMissTimer = new QTimer(this);
     m_heartbeatMissTimer->setInterval(1500);

@@ -212,6 +212,19 @@ void ConnectionPanel::onConnectClicked()
     auto* item = m_radioList->item(row);
     if (!item) return;
 
+#ifdef HAVE_HPSDR
+    if (item->data(Qt::UserRole + 1).toString() == QStringLiteral("hpsdr")) {
+        const QString mac = item->data(Qt::UserRole + 2).toString();
+        for (const HpsdrRadioInfo& r : m_hpsdrRadios) {
+            if (r.mac == mac) {
+                emit hpsdrConnectRequested(r);
+                return;
+            }
+        }
+        return;
+    }
+#endif
+
     int wanIdx = item->data(Qt::UserRole + 1).toInt();
     if (wanIdx > 0 && wanIdx <= m_wanRadios.size()) {
         emit wanConnectRequested(m_wanRadios[wanIdx - 1]);  // 1-based index
@@ -416,5 +429,35 @@ void ConnectionPanel::probeRadio(const QString& ip)
         m_manualProbeBtn->setText("Connect");
     });
 }
+
+#ifdef HAVE_HPSDR
+void ConnectionPanel::onHpsdrRadioFound(const HpsdrRadioInfo& info)
+{
+    m_hpsdrRadios.removeIf([&](const HpsdrRadioInfo& r){ return r.mac == info.mac; });
+    m_hpsdrRadios.append(info);
+
+    // Remove stale list entry for this MAC if present (radio re-announced)
+    for (int i = 0; i < m_radioList->count(); ++i) {
+        if (m_radioList->item(i)->data(Qt::UserRole + 2).toString() == info.mac) {
+            delete m_radioList->takeItem(i);
+            break;
+        }
+    }
+    QListWidgetItem* item = new QListWidgetItem(info.displayName(), m_radioList);
+    item->setData(Qt::UserRole + 1, QStringLiteral("hpsdr"));
+    item->setData(Qt::UserRole + 2, info.mac);
+}
+
+void ConnectionPanel::onHpsdrRadioLost(const QString& mac)
+{
+    m_hpsdrRadios.removeIf([&](const HpsdrRadioInfo& r){ return r.mac == mac; });
+    for (int i = 0; i < m_radioList->count(); ++i) {
+        if (m_radioList->item(i)->data(Qt::UserRole + 2).toString() == mac) {
+            delete m_radioList->takeItem(i);
+            break;
+        }
+    }
+}
+#endif
 
 } // namespace AetherSDR
