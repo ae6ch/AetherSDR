@@ -60,6 +60,15 @@ void HpsdrP2Connection::disconnectFromRadio()
 void HpsdrP2Connection::setRxFrequency(double hz)  { m_rxFreqHz.store(hz); }
 void HpsdrP2Connection::setSampleRate(quint32 rate) { m_sampleRate.store(rate); }
 
+// P2 antenna/RF-chain controls: stored for future P2 packet implementation.
+// P2 has a different control structure from P1 — offsets TBD from Thetis protocol2.cs.
+void HpsdrP2Connection::setTxAntenna(int ant)  { m_txAntenna.store(ant); }
+void HpsdrP2Connection::setRxInput(int input)  { m_rxInput.store(input); }
+void HpsdrP2Connection::setPreamp(bool on)     { m_preamp.store(on); }
+void HpsdrP2Connection::setAttenuation(int db) { m_attenDb.store(db); }
+void HpsdrP2Connection::setAdcDither(bool on)  { m_adcDither.store(on); }
+void HpsdrP2Connection::setAdcRandom(bool on)  { m_adcRandom.store(on); }
+
 void HpsdrP2Connection::sendStartPacket()
 {
     // P2 start: the first control packet with sequence 0 acts as the stream start.

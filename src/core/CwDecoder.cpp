@@ -128,6 +128,34 @@ void CwDecoder::feedAudio(const QByteArray& pcm24kStereo)
     }
 }
 
+void CwDecoder::feedAudio48k(const QByteArray& pcm48kStereo)
+{
+    if (!m_running) return;
+
+    // 2:1 stereo decimation + stereo→mono in one pass.
+    // Input: pairs of stereo int16 frames at 48kHz → output: mono int16 at 24kHz.
+    // Each output sample = average of 4 input samples (L0+R0+L1+R1) / 4.
+    const auto* src = reinterpret_cast<const int16_t*>(pcm48kStereo.constData());
+    const int stereoFrames = pcm48kStereo.size() / 4;  // one frame = L + R (4 bytes)
+    const int outSamples   = stereoFrames / 2;
+    QByteArray mono(outSamples * 2, Qt::Uninitialized);
+    auto* dst = reinterpret_cast<int16_t*>(mono.data());
+
+    for (int i = 0; i < outSamples; ++i) {
+        int32_t sum = static_cast<int32_t>(src[i * 4 + 0])   // L of frame i
+                    + static_cast<int32_t>(src[i * 4 + 1])   // R of frame i
+                    + static_cast<int32_t>(src[i * 4 + 2])   // L of frame i+1
+                    + static_cast<int32_t>(src[i * 4 + 3]);  // R of frame i+1
+        dst[i] = static_cast<int16_t>(sum / 4);
+    }
+
+    QMutexLocker lock(&m_bufMutex);
+    m_ringBuf.append(mono);
+    if (m_ringBuf.size() > RING_CAPACITY) {
+        m_ringBuf.remove(0, m_ringBuf.size() - RING_CAPACITY);
+    }
+}
+
 void CwDecoder::decodeLoop()
 {
     // ggmorse requests samplesPerFrame * resampleFactor * sampleSize bytes per callback.

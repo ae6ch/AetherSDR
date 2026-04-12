@@ -22,8 +22,9 @@ HpsdrRadio::HpsdrRadio(QObject* parent)
     m_dsp->moveToThread(&m_dspThread);
 
     // DSP output (DSP thread) → forwarded signals on HpsdrRadio (main thread).
-    connect(m_dsp.get(), &HpsdrDsp::fftReady, this, &HpsdrRadio::fftReady);
-    connect(m_dsp.get(), &HpsdrDsp::pcmReady, this, &HpsdrRadio::pcmReady);
+    connect(m_dsp.get(), &HpsdrDsp::fftReady,   this, &HpsdrRadio::fftReady);
+    connect(m_dsp.get(), &HpsdrDsp::pcmReady,   this, &HpsdrRadio::pcmReady);
+    connect(m_dsp.get(), &HpsdrDsp::levelReady, this, &HpsdrRadio::levelReady);
 }
 
 HpsdrRadio::~HpsdrRadio()

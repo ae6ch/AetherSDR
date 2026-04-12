@@ -4251,6 +4251,31 @@ void MainWindow::onHpsdrConnectRequested(const AetherSDR::HpsdrRadioInfo& info)
     connect(m_hpsdrRadio.get(), &HpsdrRadio::pcmReady,
             m_audio, &AudioEngine::feedHpsdrAudio);
 
+    // Signal-level estimate → S-meter (~100 ms updates, already on main thread).
+    connect(m_hpsdrRadio.get(), &HpsdrRadio::levelReady,
+            this, [this](float dbm) {
+        if (m_appletPanel) {
+            m_appletPanel->sMeterWidget()->setLevel(dbm);
+        }
+    });
+
+    // PCM → CW decoder (HPSDR emits 48 kHz; feedAudio48k decimates to 24 kHz).
+    connect(m_hpsdrRadio.get(), &HpsdrRadio::pcmReady,
+            &m_cwDecoder, &CwDecoder::feedAudio48k);
+
+    // Start/stop CW decoder when the HPSDR slice mode changes.
+    connect(m_hpsdrRadio->sliceModel(), &SliceModel::modeChanged,
+            this, [this](const QString& mode) {
+        bool isCw    = (mode == "CW" || mode == "CWL");
+        bool decodeOn = AppSettings::instance().value("CwDecodeOverlay", "True").toString() == "True";
+        if (m_cwDecoderApplet) m_cwDecoderApplet->setCwPanelVisible(isCw && decodeOn);
+        if (isCw && !m_cwDecoder.isRunning()) {
+            m_cwDecoder.start();
+        } else if (!isCw && m_cwDecoder.isRunning()) {
+            m_cwDecoder.stop();
+        }
+    });
+
     // On successful connect: update UI, start audio, and add a VFO widget.
     connect(m_hpsdrRadio.get(), &HpsdrRadio::connected,
             this, [this]() {
@@ -4261,25 +4286,32 @@ void MainWindow::onHpsdrConnectRequested(const AetherSDR::HpsdrRadioInfo& info)
         m_connStatusLabel->setText("Connected");
         audioStartRx();
 
-        // Add a VFO widget so the user can see and scroll-tune the frequency.
-        // sliceId 0 matches HpsdrSliceModel's constructor argument.
-        // wireVfoWidget() is NOT used — it has SmartSDR-specific connections.
-        // VfoWidget::setSlice() wires frequencyChanged→display and forwards
-        // wheel events directly to HpsdrSliceModel::setFrequency().
+        // Add a VFO widget and wire it up.  wireVfoWidget() gates SmartSDR-only
+        // connections on hasExtendedApplet() so no radio-type ifdefs are needed.
         if (SpectrumWidget* sw = spectrum()) {
             sw->removeVfoWidget(0);  // idempotent — no-op if not present
             VfoWidget* vfo = sw->addVfoWidget(0);
             if (vfo) {
-                vfo->setSlice(m_hpsdrRadio->sliceModel());
+                wireVfoWidget(vfo, m_hpsdrRadio->sliceModel());
                 sw->setActiveVfoWidget(0);
             }
         }
 
-        // Hide the SmartSDR AppletPanel — its controls (antenna, filter, TX
-        // frequency, DAX, etc.) all send FlexRadio commands that are irrelevant
-        // when an HPSDR radio is connected.  Restored on disconnect.
-        if (m_appletPanel) {
-            m_appletPanel->hide();
+        // Wire the right-side AppletPanel to the HPSDR slice.
+        // RxApplet calls virtual SliceModel methods that HpsdrSliceModel overrides,
+        // so frequency, mode, antenna, RF gain, squelch, mute, and pan all route
+        // to the correct hardware/DSP path without radio-type branching here.
+        {
+            const QStringList hpsdrAntennas = {"ANT1", "ANT2", "ANT3", "EXT"};
+            if (m_appletPanel) {
+                m_appletPanel->setAntennaList(hpsdrAntennas);
+                m_appletPanel->setSlice(m_hpsdrRadio->sliceModel());
+            }
+            if (SpectrumWidget* sw = spectrum()) {
+                if (VfoWidget* vfo = sw->vfoWidget(0)) {
+                    vfo->setAntennaList(hpsdrAntennas);
+                }
+            }
         }
     });
 
@@ -4312,9 +4344,11 @@ void MainWindow::onHpsdrDisconnected()
         sw->removeVfoWidget(0);
     }
 
-    // Restore the SmartSDR AppletPanel hidden during HPSDR connection.
+    // Unwire the HPSDR slice from AppletPanel before the radio object is destroyed.
+    // The panel stays visible; SmartSDR reconnect will call setSlice() again with
+    // the new SmartSDR slice.
     if (m_appletPanel) {
-        m_appletPanel->show();
+        m_appletPanel->setSlice(nullptr);
     }
 
     audioStopRx();
@@ -5702,87 +5736,71 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
 
     // Note: w->setSlice(s) is called at the end of this method (line ~1895)
 
-    // Per-slice signals — these are specific to the slice this widget represents
-    connect(w, &VfoWidget::closeSliceRequested, this, [this, sliceId]() {
-        if (m_radioModel.slices().size() <= 1) return;
-        m_radioModel.sendCommand(QString("slice remove %1").arg(sliceId));
-    });
-    connect(w, &VfoWidget::lockToggled, this, [this, sliceId](bool locked) {
-        if (auto* sl = m_radioModel.slice(sliceId))
-            sl->setLocked(locked);
-    });
-    connect(w, &VfoWidget::afGainChanged, this, [this, sliceId](int v) {
-        if (auto* sl = m_radioModel.slice(sliceId))
-            sl->setAudioGain(v);
-    });
-    // Record/playback
-    connect(w, &VfoWidget::recordToggled, this, [this, sliceId](bool on) {
-        if (auto* sl = m_radioModel.slice(sliceId))
-            sl->setRecordOn(on);
-    });
-    connect(w, &VfoWidget::playToggled, this, [this, sliceId](bool on) {
-        if (auto* sl = m_radioModel.slice(sliceId))
-            sl->setPlayOn(on);
-    });
-    connect(s, &SliceModel::recordOnChanged, w, &VfoWidget::setRecordOn);
-    connect(s, &SliceModel::playOnChanged, w, &VfoWidget::setPlayOn);
-    connect(s, &SliceModel::playEnabledChanged, w, &VfoWidget::setPlayEnabled);
-    connect(w, &VfoWidget::autotuneRequested, this, [this, sliceId](bool intermittent) {
-        if (m_radioModel.slice(sliceId))
-            m_radioModel.cwAutoTune(sliceId, intermittent);
-    });
-    connect(w, &VfoWidget::addSpotRequested, this, [this](double freqMhz) {
-        spectrum()->showAddSpotDialog(freqMhz);
-    });
-
-    // Clicking an inactive VfoWidget activates that slice
-    connect(w, &VfoWidget::sliceActivationRequested, this, [this](int id) {
-        if (id != m_activeSliceId)
-            setActiveSlice(id);
-    });
-
-    // SWAP — swap RX and TX frequencies (keep TX/RX assignments)
-    connect(w, &VfoWidget::swapRequested, this, [this]() {
-        if (!m_splitActive || m_splitRxSliceId < 0 || m_splitTxSliceId < 0) return;
-        auto* rx = m_radioModel.slice(m_splitRxSliceId);
-        auto* tx = m_radioModel.slice(m_splitTxSliceId);
-        if (!rx || !tx) return;
-        double rxFreq = rx->frequency();
-        double txFreq = tx->frequency();
-        rx->setFrequency(txFreq);
-        tx->setFrequency(rxFreq);
-    });
-
-    // Split toggle — per-widget, slice-aware (#328)
-    connect(w, &VfoWidget::splitToggled, this, [this, sliceId]() {
-        if (!m_splitActive) {
-            // Entering split: this slice becomes RX, create a new TX slice
-            if (m_radioModel.slices().size() >= m_radioModel.maxSlices())
-                return;
-            auto* rxSlice = m_radioModel.slice(sliceId);
-            if (!rxSlice) return;
-
-            // Create TX slice on the SAME pan as the RX slice
-            QString panId = rxSlice->panId();
-            if (panId.isEmpty())
-                panId = m_panStack ? m_panStack->activePanId() : m_radioModel.panId();
-
-            // CW split: offset 1 kHz up (convention). Other modes: 5 kHz up.
-            const QString mode = rxSlice->mode();
-            bool isCw = mode == "CW" || mode == "CWL";
-            double offsetMhz = isCw ? 0.001 : 0.005;
-            double txFreq = rxSlice->frequency() + offsetMhz;
-
-            m_splitActive = true;
-            m_splitRxSliceId = sliceId;
-            m_radioModel.sendCommand(
-                QString("slice create pan=%1 freq=%2")
-                    .arg(panId).arg(txFreq, 0, 'f', 6));
-        } else if (sliceId == m_splitRxSliceId) {
-            // Clicking SPLIT on the RX VFO again → disable split, destroy TX slice
-            disableSplit();
-        }
-    });
+    if (s->hasExtendedApplet()) {
+        // SmartSDR-specific connections: slice management, split, autotune,
+        // record/playback.  Not connected for HPSDR or other non-FlexRadio types
+        // that return false from hasExtendedApplet().
+        connect(w, &VfoWidget::closeSliceRequested, this, [this, sliceId]() {
+            if (m_radioModel.slices().size() <= 1) { return; }
+            m_radioModel.sendCommand(QString("slice remove %1").arg(sliceId));
+        });
+        connect(w, &VfoWidget::lockToggled, this, [this, sliceId](bool locked) {
+            if (auto* sl = m_radioModel.slice(sliceId)) { sl->setLocked(locked); }
+        });
+        connect(w, &VfoWidget::afGainChanged, this, [this, sliceId](int v) {
+            if (auto* sl = m_radioModel.slice(sliceId)) { sl->setAudioGain(v); }
+        });
+        connect(w, &VfoWidget::recordToggled, this, [this, sliceId](bool on) {
+            if (auto* sl = m_radioModel.slice(sliceId)) { sl->setRecordOn(on); }
+        });
+        connect(w, &VfoWidget::playToggled, this, [this, sliceId](bool on) {
+            if (auto* sl = m_radioModel.slice(sliceId)) { sl->setPlayOn(on); }
+        });
+        connect(s, &SliceModel::recordOnChanged, w, &VfoWidget::setRecordOn);
+        connect(s, &SliceModel::playOnChanged, w, &VfoWidget::setPlayOn);
+        connect(s, &SliceModel::playEnabledChanged, w, &VfoWidget::setPlayEnabled);
+        connect(w, &VfoWidget::autotuneRequested, this, [this, sliceId](bool intermittent) {
+            if (m_radioModel.slice(sliceId)) { m_radioModel.cwAutoTune(sliceId, intermittent); }
+        });
+        connect(w, &VfoWidget::addSpotRequested, this, [this](double freqMhz) {
+            spectrum()->showAddSpotDialog(freqMhz);
+        });
+        connect(w, &VfoWidget::sliceActivationRequested, this, [this](int id) {
+            if (id != m_activeSliceId) { setActiveSlice(id); }
+        });
+        connect(w, &VfoWidget::swapRequested, this, [this]() {
+            if (!m_splitActive || m_splitRxSliceId < 0 || m_splitTxSliceId < 0) { return; }
+            auto* rx = m_radioModel.slice(m_splitRxSliceId);
+            auto* tx = m_radioModel.slice(m_splitTxSliceId);
+            if (!rx || !tx) { return; }
+            double rxFreq = rx->frequency();
+            double txFreq = tx->frequency();
+            rx->setFrequency(txFreq);
+            tx->setFrequency(rxFreq);
+        });
+        connect(w, &VfoWidget::splitToggled, this, [this, sliceId]() {
+            if (!m_splitActive) {
+                if (m_radioModel.slices().size() >= m_radioModel.maxSlices()) { return; }
+                auto* rxSlice = m_radioModel.slice(sliceId);
+                if (!rxSlice) { return; }
+                QString panId = rxSlice->panId();
+                if (panId.isEmpty()) {
+                    panId = m_panStack ? m_panStack->activePanId() : m_radioModel.panId();
+                }
+                const QString mode = rxSlice->mode();
+                bool isCw = mode == "CW" || mode == "CWL";
+                double offsetMhz = isCw ? 0.001 : 0.005;
+                double txFreq = rxSlice->frequency() + offsetMhz;
+                m_splitActive = true;
+                m_splitRxSliceId = sliceId;
+                m_radioModel.sendCommand(
+                    QString("slice create pan=%1 freq=%2")
+                        .arg(panId).arg(txFreq, 0, 'f', 6));
+            } else if (sliceId == m_splitRxSliceId) {
+                disableSplit();
+            }
+        });
+    } // hasExtendedApplet
 
     // NR2 toggle with FFTW wisdom generation — wired once per VFO, never disconnected
     connect(w, &VfoWidget::nr2Toggled, this, [this](bool on) {
@@ -5816,10 +5834,14 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
 #endif
 
-    // Wire slice data into widget
+    // Wire slice data into widget.
+    // setSlice() must be called last — it triggers the initial display update
+    // after all signal connections above are in place.
     w->setSlice(s);
-    w->setAntennaList(m_radioModel.antennaList());
-    w->setTransmitModel(&m_radioModel.transmitModel());
+    if (s->hasExtendedApplet()) {
+        w->setAntennaList(m_radioModel.antennaList());
+        w->setTransmitModel(&m_radioModel.transmitModel());
+    }
 }
 
 // wireActiveVfoSignals removed — NR2/RN2/RADE are now wired permanently

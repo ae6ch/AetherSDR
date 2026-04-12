@@ -19,9 +19,16 @@ public:
     bool connectToRadio(const HpsdrRadioInfo& info) override;
     void disconnectFromRadio() override;  // Named to avoid shadowing QObject::disconnect()
 
-    void setRxFrequency(double hz) override;   // atomic — safe from main thread
-    void setSampleRate(quint32 rate) override; // atomic — safe from main thread
-    // signals iqReady and connectionLost inherited from HpsdrConnection
+    void setRxFrequency(double hz) override;
+    void setSampleRate(quint32 rate) override;
+
+    // Antenna / RF chain — stored; P2 packet encoding TBD from Thetis protocol2.cs
+    void setTxAntenna(int ant) override;
+    void setRxInput(int input) override;
+    void setPreamp(bool on) override;
+    void setAttenuation(int db) override;
+    void setAdcDither(bool on) override;
+    void setAdcRandom(bool on) override;
 
 private slots:
     void onReadyRead();
@@ -42,9 +49,15 @@ private:
     QTimer                m_controlTimer;
     QTimer                m_watchdogTimer;
     QHostAddress          m_radioAddress;
-    quint32               m_seqNum{0};  // event-loop only; not shared across threads (unlike m_rxFreqHz/m_sampleRate)
+    quint32               m_seqNum{0};
     std::atomic<double>   m_rxFreqHz{14225000.0};
     std::atomic<quint32>  m_sampleRate{384000};
+    std::atomic<int>      m_txAntenna{1};
+    std::atomic<int>      m_rxInput{0};
+    std::atomic<bool>     m_preamp{false};
+    std::atomic<int>      m_attenDb{0};
+    std::atomic<bool>     m_adcDither{false};
+    std::atomic<bool>     m_adcRandom{false};
     bool                  m_running{false};
 };
 

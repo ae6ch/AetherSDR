@@ -53,6 +53,9 @@ signals:
     // Forwarded from HpsdrDsp — consumed by AudioEngine::feedHpsdrAudio
     void pcmReady(const QByteArray& int16Stereo24k);
 
+    // Forwarded from HpsdrDsp — drives SMeterWidget (~100 ms update rate)
+    void levelReady(float dbm);
+
 private slots:
     void onConnectionLost();
 

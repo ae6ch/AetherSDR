@@ -6,13 +6,35 @@
 
 namespace AetherSDR {
 
-static constexpr float kPi    = static_cast<float>(M_PI);
-static constexpr float kTwoPi = 2.0f * kPi;
+static constexpr float kPi       = static_cast<float>(M_PI);
+static constexpr float kTwoPi   = 2.0f * kPi;
+static constexpr float kSqrt2   = 1.41421356f;
+// Converts raw dBFS (0 = ADC full-scale) to approximate dBm for Anan 10E.
+// S9 on HF = -73 dBm. ADC full-scale ≈ +10 dBm at the antenna connector
+// (includes LNA + ADC headroom). Tune kCalibDbm if the displayed S-unit is
+// systematically high or low; a calibrated signal source is the best reference.
+static constexpr float kCalibDbm = 10.0f;
+
+// FFT bin offset: shifts dBFS values into the dBm range the SpectrumWidget
+// expects (display defaults: top = -50 dBm, floor = -150 dBm, effective color
+// range ≈ -86 to -41 dBm with default black-level/gain settings).
+//
+// The Hann window coherent gain of 0.5 costs 6 dB on top of the dBFS level,
+// so a -90 dBFS IQ signal produces a peak FFT bin at ≈ -96 dBFS.  Adding
+// kFftCalibDbm ≈ 25 shifts that to ≈ -71 dBm, landing in the visible range
+// and matching the on-air feel of a SmartSDR display.
+//
+// Tune upward if the display looks too dark; downward if it clips (all bright).
+static constexpr float kFftCalibDbm = 25.0f;
 
 HpsdrDsp::HpsdrDsp(QObject* parent) : QObject(parent)
 {
     initFft();
     computeFirCoeffs();
+    // Default voice bandpass: 300 Hz HP + 3000 Hz LP at 48 kHz.
+    // setFilterBandwidth() updates these when the slice filter width changes.
+    m_hpBq = makeHpButtw2(300.f,  48000.f);
+    m_lpBq = makeLpButtw2(3000.f, 48000.f);
     qCInfo(lcHpsdr) << "HpsdrDsp: initialised, FFT_SIZE=" << FFT_SIZE
                     << "sample rate=" << m_sampleRate;
 }
@@ -46,6 +68,40 @@ void HpsdrDsp::setRxFrequency(double hz)
     updateNco();
 }
 
+void HpsdrDsp::setAfGain(float gain)
+{
+    // gain: 0–100 from UI (SliceModel::audioGain range).
+    // Scale so that 50 (default) → ×10000, calibrated for typical HF signal levels.
+    // HPSDR IQ is raw 24-bit ADC data; HF signals typically land at -100 to -80 dBFS,
+    // so ×10000 (at UI=50) puts an S5 signal (~-85 dBFS) at roughly -6 dBFS out.
+    // Strong signals (S9+) will clip without AGC — use the slider to reduce gain.
+    m_afGain = gain * 200.0f;
+}
+void HpsdrDsp::setMute(bool mute)             { m_mute = mute; }
+void HpsdrDsp::setAudioPan(float pan)         { m_audioPan = std::clamp(pan, -1.0f, 1.0f); }
+
+void HpsdrDsp::setSquelch(bool enabled, float threshold)
+{
+    m_squelchEnabled   = enabled;
+    m_squelchThreshold = threshold;
+}
+
+void HpsdrDsp::setFilterBandwidth(int lowHz, int highHz)
+{
+    m_filterLowHz  = lowHz;
+    m_filterHighHz = highHz;
+
+    // Derive post-demodulation voice bandpass from filter edges (Hz offsets from carrier;
+    // negative for LSB). LP cutoff = wider edge; HP always 300 Hz to pass voice.
+    // Minimum LP = 3000 Hz so a default/symmetric init value (e.g. ±1500) doesn't over-narrow.
+    const float lpHz = std::max(3000.f,
+                                static_cast<float>(std::max(std::abs(lowHz),
+                                                            std::abs(highHz))));
+    m_lpBq = makeLpButtw2(lpHz, 48000.f);
+    // HP stays at 300 Hz; only recompute if caller explicitly narrows it
+    // (the 300 Hz default set in the constructor is already appropriate for USB/LSB/AM/CW)
+}
+
 void HpsdrDsp::setMode(const QString& mode)
 {
     if      (mode == "USB") { m_mode.store(0); }
@@ -53,6 +109,47 @@ void HpsdrDsp::setMode(const QString& mode)
     else if (mode == "AM")  { m_mode.store(2); }
     else if (mode == "CW")  { m_mode.store(3); }
     else { qCWarning(lcHpsdr) << "HpsdrDsp: unknown mode" << mode; }
+}
+
+// ── Biquad helpers ────────────────────────────────────────────────────────────
+
+float HpsdrDsp::applyBiquad(Biquad& bq, float x) noexcept
+{
+    // Direct Form II Transposed: numerically stable, minimal state.
+    const float y = bq.b0 * x + bq.z1;
+    bq.z1 = bq.b1 * x - bq.a1 * y + bq.z2;
+    bq.z2 = bq.b2 * x - bq.a2 * y;
+    return y;
+}
+
+HpsdrDsp::Biquad HpsdrDsp::makeLpButtw2(float fcHz, float fsHz) noexcept
+{
+    // 2nd-order Butterworth low-pass via bilinear transform.
+    const float wc  = std::tan(kPi * fcHz / fsHz);
+    const float wc2 = wc * wc;
+    const float k   = 1.f + kSqrt2 * wc + wc2;
+    Biquad bq;
+    bq.b0 = wc2 / k;
+    bq.b1 = 2.f * wc2 / k;
+    bq.b2 = bq.b0;
+    bq.a1 = 2.f * (wc2 - 1.f) / k;
+    bq.a2 = (1.f - kSqrt2 * wc + wc2) / k;
+    return bq;  // z1, z2 zero-initialised (state cleared on coefficient change)
+}
+
+HpsdrDsp::Biquad HpsdrDsp::makeHpButtw2(float fcHz, float fsHz) noexcept
+{
+    // 2nd-order Butterworth high-pass via bilinear transform.
+    const float wc  = std::tan(kPi * fcHz / fsHz);
+    const float wc2 = wc * wc;
+    const float k   = 1.f + kSqrt2 * wc + wc2;
+    Biquad bq;
+    bq.b0 =  1.f / k;
+    bq.b1 = -2.f / k;
+    bq.b2 =  bq.b0;
+    bq.a1 = 2.f * (wc2 - 1.f) / k;
+    bq.a2 = (1.f - kSqrt2 * wc + wc2) / k;
+    return bq;
 }
 
 void HpsdrDsp::updateNco()
@@ -170,6 +267,19 @@ void HpsdrDsp::processIq(const QByteArray& raw)
         if (++m_audioAccumPos < m_decimRatio) { continue; }
         m_audioAccumPos = 0;
 
+        // 3b. S-meter: accumulate IQ power at 48 kHz (post-decimate, pre-demod, pre-AF gain).
+        //     Uses filtered fI/fQ so the level estimate is bandwidth-limited to the
+        //     decimated passband (~24 kHz each side), not the full ADC range.
+        m_levelAccum += fI * fI + fQ * fQ;
+        ++m_levelCount;
+        if (m_levelCount >= kLevelBlock) {
+            const float meanPow = m_levelAccum / static_cast<float>(m_levelCount);
+            const float dbfs    = (meanPow > 0.0f) ? 10.0f * std::log10(meanPow) : -140.0f;
+            emit levelReady(dbfs + kCalibDbm);
+            m_levelAccum = 0.0f;
+            m_levelCount = 0;
+        }
+
         // 4. Demodulate (analytic signal approach):
         float audio = 0.0f;
         switch (m_mode.load()) {
@@ -180,21 +290,41 @@ void HpsdrDsp::processIq(const QByteArray& raw)
             default: break;
         }
 
-        // 5. Resample 48k → 24k: simple 2-sample average (upgrade to half-band FIR later)
-        m_audio48kBuf.append(audio);
-        if (m_audio48kBuf.size() < 2) { continue; }
-        float s24k = (m_audio48kBuf[0] + m_audio48kBuf[1]) * 0.5f;
-        m_audio48kBuf.clear();
+        // 4b. Voice bandpass (48 kHz post-demodulation):
+        //     HP at 300 Hz removes DC offset and sub-bass rumble.
+        //     LP tracks the slice filter-width (setFilterBandwidth); min 3 kHz.
+        //     Removing the ~18 kHz of broadband noise outside the voice band
+        //     improves SNR by ~9 dB and makes the audio sound clearer.
+        audio = applyBiquad(m_hpBq, audio);
+        audio = applyBiquad(m_lpBq, audio);
 
-        // 6. float → int16 stereo (mono duplicated to L and R channels)
-        qint16 s16 = static_cast<qint16>(
-            std::clamp(s24k * 32767.0f, -32768.0f, 32767.0f));
-        m_audioOutBuf.append(reinterpret_cast<const char*>(&s16), 2);  // L channel
-        m_audioOutBuf.append(reinterpret_cast<const char*>(&s16), 2);  // R channel
+        // 5a. AF gain: Anan 10E 24-bit IQ at noise floor ≈ 1e-5; needs ×1000 to clear int16 quantisation
+        audio *= m_afGain;
 
-        // 7. Emit in 10 ms chunks: 10ms at 24kHz stereo
-        //    24000 Hz × 10 ms × 2 ch × 2 bytes = 960 bytes = 240 stereo frames × 4 bytes/frame
-        constexpr int kEmitBytes = 240 * 4;
+        // 5b. Squelch: exponential-moving-average RMS; gate output when below threshold
+        m_squelchRms = 0.999f * m_squelchRms + 0.001f * (audio * audio);
+        if (m_squelchEnabled && m_squelchRms < m_squelchThreshold * m_squelchThreshold) {
+            audio = 0.0f;
+        }
+
+        // 5c. Mute
+        if (m_mute) { audio = 0.0f; }
+
+        // 5. float → int16 stereo with audio pan (output at 48kHz — FIR+decimate already
+        //    band-limits to < 24 kHz so the sink's own resampler can downconvert cleanly
+        //    if needed; avoids the quality loss of an in-DSP 2-tap average).
+        //    pan: -1.0=full-L, 0=centre, +1.0=full-R (constant-power sin/cos law)
+        const float angle  = (m_audioPan + 1.0f) * (kPi / 4.0f);  // [0, π/2]
+        const float gainL  = std::cos(angle);
+        const float gainR  = std::sin(angle);
+        qint16 sL = static_cast<qint16>(std::clamp(audio * gainL * 32767.0f, -32768.0f, 32767.0f));
+        qint16 sR = static_cast<qint16>(std::clamp(audio * gainR * 32767.0f, -32768.0f, 32767.0f));
+        m_audioOutBuf.append(reinterpret_cast<const char*>(&sL), 2);  // L channel
+        m_audioOutBuf.append(reinterpret_cast<const char*>(&sR), 2);  // R channel
+
+        // 6. Emit in 10 ms chunks at 48kHz stereo
+        //    48000 Hz × 10 ms × 2 ch × 2 bytes = 1920 bytes = 480 stereo frames × 4 bytes/frame
+        constexpr int kEmitBytes = 480 * 4;
         if (m_audioOutBuf.size() >= kEmitBytes) {
             emit pcmReady(m_audioOutBuf.left(kEmitBytes));
             m_audioOutBuf.remove(0, kEmitBytes);
@@ -221,7 +351,7 @@ void HpsdrDsp::runFft()
         const float re   = m_fftOut[k][0];
         const float im   = m_fftOut[k][1];
         const float mag2 = (re * re + im * im) * normSq;
-        dbfs[k] = (mag2 > 0.0f) ? 10.0f * std::log10(mag2) : -140.0f;
+        dbfs[k] = (mag2 > 0.0f) ? 10.0f * std::log10(mag2) + kFftCalibDbm : -140.0f + kFftCalibDbm;
     }
 
     // FFT-shift: swap first half and second half in-place
