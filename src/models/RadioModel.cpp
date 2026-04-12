@@ -760,7 +760,10 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         }
 
         sendCmd("client program AetherSDR");
-        QString station = AppSettings::instance().value("StationName", "AetherSDR").toString();
+        QString station = AppSettings::instance().value("StationName", "").toString();
+        if (station.isEmpty()) {
+            station = QSysInfo::machineHostName();
+        }
         sendCmd(QString("client station %1").arg(station));
         sendCmd("client set send_reduced_bw_dax=1");
         // Set network MTU for VITA-49 packets (matches FlexLib behavior)
@@ -2165,6 +2168,10 @@ void RadioModel::handleRadioStatus(const QMap<QString, QString>& kvs)
     }
     if (kvs.contains("mute_local_audio_when_remote")) {
         m_muteLocalWhenRemote = kvs["mute_local_audio_when_remote"] == "1";
+        changed = true;
+    }
+    if (kvs.contains("auto_save")) {
+        m_autoSave = kvs["auto_save"] == "1";
         changed = true;
     }
     if (kvs.contains("freq_error_ppb")) {

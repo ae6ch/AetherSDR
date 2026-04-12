@@ -3,6 +3,7 @@
 #include "ComboStyle.h"
 #include "models/RadioModel.h"
 #include "core/AppSettings.h"
+#include <QSysInfo>
 #include "core/AudioEngine.h"
 #ifdef HAVE_SERIALPORT
 #include "core/SerialPortController.h"
@@ -240,10 +241,12 @@ QWidget* RadioSetupDialog::buildRadioTab()
         });
 
         grid->addWidget(new QLabel("Station Name:"), 1, 2);
+        QString stationVal = AppSettings::instance().value("StationName", "").toString();
         auto* stationEdit = new QLineEdit(
-            AppSettings::instance().value("StationName", "AetherSDR").toString());
+            stationVal.isEmpty() ? QSysInfo::machineHostName() : stationVal);
         stationEdit->setStyleSheet(kEditStyle);
-        stationEdit->setToolTip("Identifies this client to other Multi-Flex stations");
+        stationEdit->setToolTip("Identifies this client to other Multi-Flex stations.\n"
+                                "Defaults to OS hostname if empty.");
         grid->addWidget(stationEdit, 1, 3);
         connect(stationEdit, &QLineEdit::editingFinished, this, [this, stationEdit] {
             auto& s = AppSettings::instance();
@@ -1524,15 +1527,26 @@ QWidget* RadioSetupDialog::buildAudioTab()
 
     // Wire device changes to AudioEngine
     if (m_audio) {
+        // Route through QueuedConnection so setInputDevice/setOutputDevice
+        // execute on the audio worker thread, preventing use-after-free on
+        // macOS CoreAudio when switching devices from the GUI thread (#1114).
         connect(inCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                this, [this, inCombo, inDevices](int idx) {
-            if (idx >= 0 && idx < inDevices.size())
-                m_audio->setInputDevice(inDevices[idx]);
+                this, [this, inDevices](int idx) {
+            if (idx >= 0 && idx < inDevices.size()) {
+                const QAudioDevice dev = inDevices[idx];
+                QMetaObject::invokeMethod(m_audio, [this, dev]() {
+                    m_audio->setInputDevice(dev);
+                }, Qt::QueuedConnection);
+            }
         });
         connect(outCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                this, [this, outCombo, outDevices](int idx) {
-            if (idx >= 0 && idx < outDevices.size())
-                m_audio->setOutputDevice(outDevices[idx]);
+                this, [this, outDevices](int idx) {
+            if (idx >= 0 && idx < outDevices.size()) {
+                const QAudioDevice dev = outDevices[idx];
+                QMetaObject::invokeMethod(m_audio, [this, dev]() {
+                    m_audio->setOutputDevice(dev);
+                }, Qt::QueuedConnection);
+            }
         });
     }
 

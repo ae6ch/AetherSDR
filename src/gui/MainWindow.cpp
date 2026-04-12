@@ -119,6 +119,22 @@
 
 namespace AetherSDR {
 
+static bool macDaxDriverInstalled()
+{
+#ifdef Q_OS_MAC
+    const QFileInfo driverBundle("/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver");
+    if (!driverBundle.exists() || !driverBundle.isDir())
+        return false;
+
+    const QString bundlePath = driverBundle.absoluteFilePath();
+    const QFileInfo driverExec(bundlePath + "/Contents/MacOS/AetherSDRDAX");
+    const QFileInfo infoPlist(bundlePath + "/Contents/Info.plist");
+    return driverExec.exists() && driverExec.isFile() && infoPlist.exists() && infoPlist.isFile();
+#else
+    return true;
+#endif
+}
+
 // ─── Shortcut guard (file-scope for use as std::function<bool()>) ───────────
 
 static constexpr const char* kPaTempUnitSettingKey = "PaTempDisplayUnit";
@@ -402,7 +418,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_propForecast, &PropForecastClient::forecastUpdated,
             this, [this](const PropForecast& fc) {
         for (PanadapterApplet* applet : m_panStack->allApplets()) {
-            applet->spectrumWidget()->setPropForecast(fc.kIndex, fc.sfi);
+            applet->spectrumWidget()->setPropForecast(fc.kIndex, fc.aIndex, fc.sfi);
         }
     });
     // Restore persisted setting — timer only arms if enabled
@@ -1155,14 +1171,7 @@ MainWindow::MainWindow(QWidget* parent)
         if (on) {
             m_radioModel.createRxAudioStream();
         } else {
-            // Don't remove stream if TCI clients are connected (#1014)
-            bool tciNeedsStream = false;
-#ifdef HAVE_WEBSOCKETS
-            tciNeedsStream = m_tciServer && m_tciServer->clientCount() > 0;
-#endif
-            if (!tciNeedsStream) {
-                m_radioModel.removeRxAudioStream();
-            }
+            m_radioModel.removeRxAudioStream();
         }
     });
     connect(m_titleBar, &TitleBar::masterVolumeChanged, this, [this](int pct) {
@@ -1737,28 +1746,22 @@ MainWindow::MainWindow(QWidget* parent)
                 m_tciServer, &TciServer::onDaxAudioReady);
     }
 
-    // Create/remove audio stream based on TCI client demand (#1014).
-    // When PC Audio is off, a TCI client connecting still needs the stream.
-    connect(m_tciServer, &TciServer::clientCountChanged, this, [this](int count) {
-        bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
-        if (count > 0 && !pcAudio && m_radioModel.isConnected()) {
-            m_radioModel.createRxAudioStream();
-            m_titleBar->setPcAudioEnabled(true);   // reflect TCI-forced stream in UI (#1071)
-        } else if (count == 0 && !pcAudio) {
-            m_radioModel.removeRxAudioStream();
-            m_titleBar->setPcAudioEnabled(false);  // restore button to saved preference (#1071)
-        }
-    });
+    // TCI client count changes no longer auto-create/remove the audio stream.
+    // Control-only TCI clients (StreamDeck) don't need audio, and auto-creating
+    // the stream overrode the user's explicit PC Audio toggle. Users who need
+    // TCI audio (WSJT-X) should enable PC Audio manually. (#1071)
 #endif
 
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
     // DAX enable button in CatApplet → start/stop DAX bridge
     connect(m_appletPanel->catApplet(), &CatApplet::daxToggled,
             this, [this](bool on) {
-        if (on)
-            startDax();
-        else
+        if (on) {
+            if (!startDax() && m_appletPanel && m_appletPanel->catApplet())
+                m_appletPanel->catApplet()->setDaxEnabled(false);
+        } else {
             stopDax();
+        }
     });
 #endif
 
@@ -1871,6 +1874,8 @@ MainWindow::MainWindow(QWidget* parent)
 
     // Restore saved geometry from XML settings
     auto& s = AppSettings::instance();
+    m_startupCenterMhz = s.value("LastFrequency", "0").toDouble();
+    m_startupCenterPending = (m_startupCenterMhz > 0.0);
     const QString geomB64 = s.value("MainWindowGeometry").toString();
     if (!geomB64.isEmpty())
         restoreGeometry(QByteArray::fromBase64(geomB64.toLatin1()));
@@ -1889,6 +1894,12 @@ MainWindow::MainWindow(QWidget* parent)
     if (lastSerial.isEmpty()) {
         QTimer::singleShot(500, this, [this]() { toggleConnectionDialog(); });
     }
+
+    // Restore the Memory dialog if it was open when the app last exited.
+    QTimer::singleShot(0, this, [this]() {
+        if (AppSettings::instance().value("MemoryDialogOpen", "False").toString() == "True")
+            showMemoryDialog();
+    });
 
     // What's New dialog — show on version change (#483)
     // Also check for newer release and offer upgrade (#486)
@@ -1968,11 +1979,15 @@ MainWindow::~MainWindow()
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    m_shuttingDown = true;
     auto& s = AppSettings::instance();
     s.setValue("MainWindowGeometry", saveGeometry().toBase64());
     s.setValue("MainWindowState",   saveState().toBase64());
     // SplitterState no longer saved (2-pane layout uses stretch factors)
     // ConnPanelCollapsed removed — panel is now a popup dialog
+
+    s.setValue("MemoryDialogOpen",
+        (m_memoryDialog && m_memoryDialog->isVisible()) ? "True" : "False");
 
     // Save active slice frequency/mode for restore on next launch
     auto* sl = activeSlice();
@@ -2221,6 +2236,28 @@ void MainWindow::toggleConnectionDialog()
     m_connPanel->raise();
 }
 
+void MainWindow::showMemoryDialog()
+{
+    if (m_memoryDialog) {
+        m_memoryDialog->show();
+        m_memoryDialog->raise();
+        m_memoryDialog->activateWindow();
+        return;
+    }
+
+    auto* dlg = new MemoryDialog(&m_radioModel, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &QObject::destroyed, this, [this] {
+        if (m_shuttingDown)
+            return;
+        auto& s = AppSettings::instance();
+        s.setValue("MemoryDialogOpen", "False");
+        s.save();
+    });
+    m_memoryDialog = dlg;
+    dlg->show();
+}
+
 void MainWindow::updatePaTempLabel()
 {
     const QString unit = m_paTempUseFahrenheit ? "F" : "C";
@@ -2377,15 +2414,7 @@ void MainWindow::buildMenuBar()
     });
     auto* memoryAction = settingsMenu->addAction("Memory...");
     connect(memoryAction, &QAction::triggered, this, [this] {
-        if (m_memoryDialog) {
-            m_memoryDialog->raise();
-            m_memoryDialog->activateWindow();
-            return;
-        }
-        auto* dlg = new MemoryDialog(&m_radioModel, this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        m_memoryDialog = dlg;
-        dlg->show();
+        showMemoryDialog();
     });
     auto* usbCablesAction = settingsMenu->addAction("USB Cables...");
     connect(usbCablesAction, &QAction::triggered, this, [this] {
@@ -2878,8 +2907,7 @@ void MainWindow::buildMenuBar()
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
         if (m_radioModel.isConnected()) {
             if (on) {
-                startDax();
-                if (m_appletPanel && m_appletPanel->catApplet())
+                if (startDax() && m_appletPanel && m_appletPanel->catApplet())
                     m_appletPanel->catApplet()->setDaxEnabled(true);
             } else {
                 stopDax();
@@ -3077,7 +3105,7 @@ void MainWindow::buildMenuBar()
         // If turning off, clear the stale values so they don't reappear
         if (!on) {
             for (PanadapterApplet* applet : m_panStack->allApplets()) {
-                applet->spectrumWidget()->setPropForecast(-1, -1);
+                applet->spectrumWidget()->setPropForecast(-1, -1, -1);
             }
         }
     });
@@ -3160,12 +3188,14 @@ void MainWindow::buildMenuBar()
     });
     helpMenu->addSeparator();
     helpMenu->addAction("Support...", this, [this]() {
-        SupportDialog dlg(this);
-        dlg.setRadioModel(&m_radioModel);
-        dlg.exec();
+        auto* dlg = new SupportDialog(this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->setRadioModel(&m_radioModel);
+        dlg->show();
+        dlg->raise();
     });
     helpMenu->addAction("Slice Troubleshooting...", this, [this]() {
-        SliceTroubleshootingDialog dlg(&m_radioModel, this);
+        SliceTroubleshootingDialog dlg(&m_radioModel, m_audio, this);
         dlg.exec();
     });
     helpMenu->addAction("What's New...", this, [this]() {
@@ -3651,7 +3681,7 @@ void MainWindow::buildUI()
     // ── Center stretch → STATION → stretch ───────────────────────────────
     hbox->addStretch(1);
 
-    auto* stationPrefix = new QLabel("STATION:");
+    auto* stationPrefix = new QLabel("RADIO:");
     stationPrefix->setStyleSheet(valStyle);
     hbox->addWidget(stationPrefix);
 
@@ -4058,8 +4088,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         // be registered in PanadapterStream yet.
         if (AppSettings::instance().value("AutoStartDAX", "False").toString() == "True") {
             QTimer::singleShot(3000, this, [this]() {
-                startDax();
-                if (m_appletPanel && m_appletPanel->catApplet())
+                if (startDax() && m_appletPanel && m_appletPanel->catApplet())
                     m_appletPanel->catApplet()->setDaxEnabled(true);
             });
         }
@@ -4283,9 +4312,10 @@ void MainWindow::onSliceAdded(SliceModel* s)
     if (m_applyingLayout) return;
 
     qDebug() << "MainWindow: slice added" << s->sliceId();
+    const bool firstSlice = (m_activeSliceId < 0);
 
     // First slice — wire everything up
-    if (m_activeSliceId < 0) {
+    if (firstSlice) {
         setActiveSlice(s->sliceId());
 
         // Detect initial band from radio's frequency
@@ -4604,6 +4634,14 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // Auto-focus the TX VFO so the user can immediately tune the TX offset
         setActiveSlice(s->sliceId());
     }
+
+    if (firstSlice && m_startupCenterPending) {
+        m_startupCenterPending = false;
+        const double startupCenter = m_startupCenterMhz;
+        QTimer::singleShot(0, this, [this, startupCenter]() {
+            centerActiveSliceInPanadapter(true, startupCenter);
+        });
+    }
 }
 
 void MainWindow::onSliceRemoved(int id)
@@ -4721,17 +4759,22 @@ void MainWindow::setActiveSlice(int sliceId)
             m_panStack->activeApplet()->setSliceId(sliceId);
     }
     m_appletPanel->setSlice(s);
-    spectrum()->overlayMenu()->setSlice(s);
+    auto* sw = spectrum();
+    if (sw) {
+        sw->overlayMenu()->setSlice(s);
 
-    // Sync step size from the new active slice
-    if (s->stepHz() > 0) {
-        if (spectrum()) spectrum()->setStepSize(s->stepHz());
+        // Sync step size from the new active slice
+        if (s->stepHz() > 0) {
+            sw->setStepSize(s->stepHz());
+            m_appletPanel->rxApplet()->syncStepFromSlice(s->stepHz(), s->stepList());
+        }
+
+        // Switch active VFO widget display (NR2/RN2/RADE are wired permanently
+        // in wireVfoWidget, no disconnect/reconnect needed)
+        sw->setActiveVfoWidget(sliceId);
+    } else if (s->stepHz() > 0) {
         m_appletPanel->rxApplet()->syncStepFromSlice(s->stepHz(), s->stepList());
     }
-
-    // Switch active VFO widget display (NR2/RN2/RADE are wired permanently
-    // in wireVfoWidget, no disconnect/reconnect needed)
-    spectrum()->setActiveVfoWidget(sliceId);
 
     // Update filter limits for the active slice's mode
     updateFilterLimitsForMode(s->mode());
@@ -4784,8 +4827,10 @@ void MainWindow::updateFilterLimitsForMode(const QString& mode)
         // USB, DIGU, CW, RTTY, etc.
         minHz = 0; maxHz = 12000;
     }
-    spectrum()->setFilterLimits(minHz, maxHz);
-    spectrum()->setMode(mode);
+    if (auto* s = spectrum()) {
+        s->setFilterLimits(minHz, maxHz);
+        s->setMode(mode);
+    }
 }
 
 void MainWindow::pushSliceOverlay(SliceModel* s)
@@ -4913,7 +4958,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setPropForecastVisible(m_propForecast->isEnabled());
         if (m_propForecast->isEnabled()) {
             PropForecast fc = m_propForecast->lastForecast();
-            sw->setPropForecast(fc.kIndex, fc.sfi);
+            sw->setPropForecast(fc.kIndex, fc.aIndex, fc.sfi);
         }
     }
 
@@ -5058,6 +5103,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setSpotStartPct(s.value("SpotsStartingHeightPercentage", "50").toInt());
         sw->setSpotOverrideColors(s.value("IsSpotsOverrideColorsEnabled", "False").toString() == "True");
         sw->setSpotOverrideBg(s.value("IsSpotsOverrideBackgroundColorsEnabled", "True").toString() == "True");
+        sw->setSpotColor(QColor(s.value("SpotsOverrideColor", "#FFFF00").toString()));
+        sw->setSpotBgColor(QColor(s.value("SpotsOverrideBgColor", "#000000").toString()));
+        sw->setSpotBgOpacity(s.value("SpotsBackgroundOpacity", 48).toInt());
     }
 
     // ── Per-pan display controls (client-side) ───────────────────────────
@@ -5069,6 +5117,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw, &SpectrumWidget::setFftHeatMap);
     connect(menu, &SpectrumOverlayMenu::showGridChanged,
             sw, &SpectrumWidget::setShowGrid);
+    connect(menu, &SpectrumOverlayMenu::fftLineWidthChanged,
+            sw, &SpectrumWidget::setFftLineWidth);
     connect(menu, &SpectrumOverlayMenu::noiseFloorPositionChanged,
             sw, &SpectrumWidget::setNoiseFloorPosition);
     connect(menu, &SpectrumOverlayMenu::noiseFloorEnableChanged,
@@ -5449,6 +5499,11 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this](int sliceId) {
         if (m_radioModel.slices().size() <= 1) return;
         m_radioModel.sendCommand(QString("slice remove %1").arg(sliceId));
+    });
+    connect(sw, &SpectrumWidget::sliceTuneRequested,
+            this, [this](int sliceId, double freqMhz) {
+        if (auto* s = m_radioModel.slice(sliceId))
+            s->setFrequency(freqMhz);
     });
 
     // ── Band selection ───────────────────────────────────────────────────
@@ -5915,6 +5970,35 @@ void MainWindow::updateKeyerAvailability(const QString& mode)
     m_dvkIndicator->setCursor(isSsb ? Qt::PointingHandCursor : Qt::ArrowCursor);
 }
 
+void MainWindow::centerActiveSliceInPanadapter(bool forceRadioCenter, double centerMhz)
+{
+    auto* s = activeSlice();
+    if (!s || s->panId().isEmpty()) return;
+
+    auto* sw = spectrumForSlice(s);
+    if (!sw) return;
+
+    auto* pan = m_radioModel.panadapter(s->panId());
+    const double bandwidthMhz = pan ? pan->bandwidthMhz() : m_radioModel.panBandwidthMhz();
+    const double targetMhz = (centerMhz > 0.0) ? centerMhz : s->frequency();
+
+    if (m_panStack) {
+        if (auto* applet = m_panStack->panadapter(s->panId()))
+            m_panStack->setActivePan(applet->panId());
+    }
+
+    // Keep the local spectrum centered immediately so the active slice marker
+    // is visible before the radio's status echo arrives.
+    sw->setFrequencyRange(targetMhz, bandwidthMhz);
+    sw->setVfoFrequency(targetMhz);
+
+    if (forceRadioCenter && m_radioModel.isConnected()) {
+        m_radioModel.sendCommand(
+            QString("display pan set %1 center=%2")
+                .arg(s->panId()).arg(targetMhz, 0, 'f', 6));
+    }
+}
+
 void MainWindow::registerShortcutActions()
 {
     // Helper: nudge active slice frequency by N steps.
@@ -5963,7 +6047,13 @@ void MainWindow::registerShortcutActions()
             auto* s = activeSlice();
             auto* sw = s ? spectrumForSlice(s) : nullptr;
             auto* vfo = (s && sw) ? sw->vfoWidget(s->sliceId()) : nullptr;
-            if (vfo) vfo->beginDirectEntry();
+            if (!s || !vfo) return;
+            centerActiveSliceInPanadapter(true);
+            QPointer<VfoWidget> vfoGuard = vfo;
+            QTimer::singleShot(0, this, [vfoGuard]() {
+                if (vfoGuard)
+                    vfoGuard->beginDirectEntry();
+            });
         });
 
     // ── Band ────────────────────────────────────────────────────────────
@@ -6686,15 +6776,18 @@ void MainWindow::restoreBandState(const BandSnapshot& snap)
 
 void MainWindow::onFrequencyChanged(double mhz)
 {
+    auto* sw = spectrum();
+    if (!sw) return;  // pan may be absent during band change (#1146)
+
     // If the slice is locked, snap spectrum back to the current freq.
     if (auto* s = activeSlice(); s && s->isLocked()) {
         m_updatingFromModel = true;
-        spectrum()->setVfoFrequency(s->frequency());
+        sw->setVfoFrequency(s->frequency());
         m_updatingFromModel = false;
         return;
     }
 
-    spectrum()->setVfoFrequency(mhz);
+    sw->setVfoFrequency(mhz);
     if (!m_updatingFromModel) {
         if (auto* s = activeSlice()) {
             s->setFrequency(mhz);
@@ -6878,24 +6971,31 @@ void MainWindow::deactivateRADE()
 #endif
 
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
-void MainWindow::startDax()
+bool MainWindow::startDax()
 {
-    if (m_daxBridge) return;
+    if (m_daxBridge) return true;
 
 #ifdef Q_OS_MAC
-    // Only start if HAL plugin is installed
-    if (!QFileInfo::exists("/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver/Contents/MacOS/AetherSDRDAX")) {
-        qInfo() << "MainWindow: DAX HAL plugin not installed, skipping DAX bridge";
-        return;
+    // Only start if the macOS HAL driver bundle is installed.
+    if (!macDaxDriverInstalled()) {
+        qWarning() << "MainWindow: DAX HAL plugin not installed";
+        QMessageBox::warning(this, "DAX Audio Driver Missing",
+            "The AetherSDR DAX audio driver is not installed on this Mac.\n\n"
+            "Install the DAX Virtual Audio Driver from the AetherSDR DMG package, "
+            "then enable DAX again.");
+        return false;
     }
 #endif
 
     m_daxBridge = new DaxBridge(this);
     if (!m_daxBridge->open()) {
         qWarning() << "MainWindow: failed to open DAX audio bridge";
+        QMessageBox::warning(this, "DAX Audio Bridge Error",
+            "AetherSDR could not open the DAX audio bridge.\n\n"
+            "If the DAX driver was just installed, quit and relaunch AetherSDR and try again.");
         delete m_daxBridge;
         m_daxBridge = nullptr;
-        return;
+        return false;
     }
 
     // Listen for DAX stream status messages to register them in PanadapterStream.
@@ -6997,6 +7097,7 @@ void MainWindow::startDax()
     // via updateDaxTxMode(). Bridge up ≠ DAX TX active. (#534)
 
     qInfo() << "MainWindow: starting DAX audio bridge";
+    return true;
 }
 
 void MainWindow::stopDax()
