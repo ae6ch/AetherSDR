@@ -1397,4 +1397,37 @@ void AudioEngine::feedDecodedSpeech(const QByteArray& pcm)
         m_rxBuffer.append(pcm);
 }
 
+#ifdef HAVE_HPSDR
+void AudioEngine::feedHpsdrAudio(const QByteArray& pcm)
+{
+    // HpsdrDsp emits 48kHz stereo int16.  Route through m_rxBuffer so the
+    // 10 ms pull-timer handles rate control.
+    //
+    // Sink at 48kHz (m_resampleTo48k=true on macOS/Windows): append directly.
+    // Sink at 24kHz (m_resampleTo48k=false on Linux when 24kHz is supported):
+    //   decimate 2:1 by averaging consecutive stereo frame pairs.  The FIR in
+    //   HpsdrDsp already band-limits the signal to < 21 kHz so no aliasing
+    //   occurs when halving the rate to 24kHz.
+    if (!m_audioSink) {
+        return;
+    }
+    if (m_resampleTo48k) {
+        m_rxBuffer.append(pcm);
+    } else {
+        // 2:1 stereo int16 decimation: average each pair of consecutive frames
+        const int frames = pcm.size() / 4;  // stereo int16 = 4 bytes/frame
+        QByteArray out;
+        out.reserve(pcm.size() / 2);
+        const qint16* src = reinterpret_cast<const qint16*>(pcm.constData());
+        for (int i = 0; i + 1 < frames; i += 2) {
+            qint16 l = static_cast<qint16>((src[i * 2 + 0] + src[(i + 1) * 2 + 0]) / 2);
+            qint16 r = static_cast<qint16>((src[i * 2 + 1] + src[(i + 1) * 2 + 1]) / 2);
+            out.append(reinterpret_cast<const char*>(&l), 2);
+            out.append(reinterpret_cast<const char*>(&r), 2);
+        }
+        m_rxBuffer.append(out);
+    }
+}
+#endif
+
 } // namespace AetherSDR

@@ -3879,4 +3879,15 @@ void SpectrumWidget::drawOffScreenSlices(QPainter& p, const QRect& specRect)
     }
 }
 
+#ifdef HAVE_HPSDR
+void SpectrumWidget::feedFftBins(quint64 centerHz, float bandwidthHz,
+                                  QVector<float> binsDbfs)
+{
+    const double centerMhz    = static_cast<double>(centerHz) / 1.0e6;
+    const double bandwidthMhz = static_cast<double>(bandwidthHz) / 1.0e6;
+    setFrequencyRange(centerMhz, bandwidthMhz);
+    updateSpectrum(binsDbfs);
+}
+#endif
+
 } // namespace AetherSDR

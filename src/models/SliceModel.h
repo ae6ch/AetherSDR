@@ -21,6 +21,7 @@ class SliceModel : public QObject {
 
 public:
     explicit SliceModel(int id, QObject* parent = nullptr);
+    ~SliceModel() override = default;
 
     // Getters
     int     sliceId()    const { return m_id; }
@@ -90,15 +91,24 @@ public:
     double  txOffsetFreq()        const { return m_txOffsetFreq; }
     int     fmDeviation()         const { return m_fmDeviation; }
 
-    // Setters (emit signals AND send radio commands)
-    void setFrequency(double mhz);           // slice tune autopan=0 — no recenter
-    void tuneAndRecenter(double mhz);      // slice tune — recenters pan (band changes)
-    void setMode(const QString& mode);
-    void setFilterWidth(int low, int high);
-    void setAudioGain(float gain);
-    void setRfGain(float gain);
-    void setAudioPan(int pan);
-    void setAudioMute(bool mute);
+    // Capability query — override in subclasses to advertise what the radio supports.
+    // Used by MainWindow to conditionally show/hide AppletPanel and gate
+    // SmartSDR-specific VFO widget connections without radio-type #ifdefs.
+    virtual bool hasExtendedApplet() const { return true; }
+
+    // Setters (emit signals AND send radio commands).
+    // The three below are virtual so HpsdrSliceModel can intercept and route to
+    // HPSDR hardware instead of emitting SmartSDR commandReady strings.
+    virtual void setFrequency(double mhz);           // slice tune autopan=0 — no recenter
+    virtual void tuneAndRecenter(double mhz);        // slice tune — recenters pan (band changes)
+    virtual void setMode(const QString& mode);
+    virtual void setFilterWidth(int low, int high);
+    virtual void setAudioGain(float gain);
+    virtual void setAudioMute(bool mute);
+    virtual void setAudioPan(int pan);               // SmartSDR: -100..+100; HPSDR: mapped to -1..+1
+    virtual void setRfGain(float gain);              // SmartSDR: dB float; HPSDR: mapped to preamp/atten steps
+    virtual void setRxAntenna(const QString& ant);
+    virtual void setSquelch(bool on, int level);     // level: 0–100
     void setDiversity(bool on);
     bool diversity() const { return m_diversity; }
     bool isDiversityChild() const { return m_diversityChild; }
@@ -110,7 +120,6 @@ public:
     void setEscEnabled(bool on);
     void setEscGain(float gain);
     void setEscPhaseShift(float deg);
-    void setRxAntenna(const QString& ant);
     void setTxAntenna(const QString& ant);
     void setLocked(bool locked);
     void setQsk(bool on);
@@ -135,7 +144,6 @@ public:
     void setAgcMode(const QString& mode);
     void setAgcThreshold(int value);
     void setAgcOffLevel(int value);
-    void setSquelch(bool on, int level);
     void setRit(bool on, int hz);
     void setXit(bool on, int hz);
     void setDaxChannel(int ch);

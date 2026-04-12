@@ -288,6 +288,13 @@ public:
     void setShowTxInWaterfall(bool on) { m_showTxInWaterfall = on; }
     void setHasTxSlice(bool has) { m_hasTxSlice = has; }
 
+#ifdef HAVE_HPSDR
+public slots:
+    // HPSDR FFT input: converts Hz → MHz and feeds the existing spectrum display.
+    // bins are dBFS (uncalibrated to dBm — tracked as follow-up for RX MVP).
+    void feedFftBins(quint64 centerHz, float bandwidthHz, QVector<float> binsDbfs);
+#endif
+
 signals:
     // Emitted when user clicks on an inactive slice marker.
     void sliceClicked(int sliceId);

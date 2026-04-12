@@ -3,6 +3,10 @@
 #include "core/RadioDiscovery.h"
 #include "core/SmartLinkClient.h"
 
+#ifdef HAVE_HPSDR
+#include "hpsdr/HpsdrRadioInfo.h"
+#endif
+
 #include <QWidget>
 #include <QListWidget>
 #include <QPushButton>
@@ -38,12 +42,20 @@ public slots:
     // SmartLink
     void setSmartLinkClient(SmartLinkClient* client);
 
+#ifdef HAVE_HPSDR
+    void onHpsdrRadioFound(const AetherSDR::HpsdrRadioInfo& info);
+    void onHpsdrRadioLost(const QString& mac);
+#endif
+
 signals:
     void connectRequested(const RadioInfo& radio);
     void wanConnectRequested(const WanRadioInfo& radio);
     void disconnectRequested();
     void routedRadioFound(const RadioInfo& radio);
     void smartLinkLoginRequested(const QString& email, const QString& password);
+#ifdef HAVE_HPSDR
+    void hpsdrConnectRequested(const AetherSDR::HpsdrRadioInfo& radio);
+#endif
 
 private slots:
     void onConnectClicked();
@@ -73,6 +85,10 @@ private:
     QWidget*     m_manualGroup{nullptr};
     QLineEdit*   m_manualIpEdit{nullptr};
     QPushButton* m_manualProbeBtn{nullptr};
+
+#ifdef HAVE_HPSDR
+    QList<AetherSDR::HpsdrRadioInfo> m_hpsdrRadios;
+#endif
 };
 
 } // namespace AetherSDR

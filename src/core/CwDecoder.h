@@ -46,6 +46,10 @@ public slots:
     // Feed 24kHz stereo int16 PCM (same format as AudioEngine receives).
     void feedAudio(const QByteArray& pcm24kStereo);
 
+    // Feed 48kHz stereo int16 PCM (HPSDR path).
+    // Downsamples 2:1 and mixes to mono before buffering.
+    void feedAudio48k(const QByteArray& pcm48kStereo);
+
 signals:
     void textDecoded(const QString& text, float cost);
     void statsUpdated(float pitchHz, float speedWpm);

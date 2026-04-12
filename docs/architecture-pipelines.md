@@ -5,7 +5,7 @@ thread safety, signal routing, or data flow issues.
 
 ### Data Pipelines
 
-Multi-thread architecture — up to 11 threads depending on features enabled:
+Multi-thread architecture — up to 13 threads depending on features enabled:
 - **Main thread**: GUI rendering (paintEvent), RadioModel + all sub-models, user input
 - **Connection thread**: RadioConnection (TCP 4992 I/O, kernel TCP_INFO RTT)
 - **Audio thread**: AudioEngine (RX/TX audio, NR2/RN2 DSP, QAudioSink/Source)
@@ -17,6 +17,8 @@ Multi-thread architecture — up to 11 threads depending on features enabled:
 - **RADE thread**: RADEEngine neural encoder/decoder (on-demand, HAVE_RADE)
 - **BNR thread**: NvidiaBnrFilter gRPC async I/O (std::thread, HAVE_BNR)
 - **DXCC parse thread**: DxccColorProvider ADIF log parser (one-shot at startup)
+- **HPSDR P2 recv thread**: HpsdrP2Connection UDP receive + control timer (HAVE_HPSDR, when Anan connected)
+- **HPSDR DSP thread**: HpsdrDsp FFT + NCO/FIR/demod audio pipeline (HAVE_HPSDR, when Anan connected)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -141,6 +143,28 @@ EXTERNAL CONTROL PIPELINES:                 ◄── EXTCONTROLLERS THREAD
                                                        └─→ AudioEngine (mute, mic gain)
   TGXL (TCP 9010)          ──→ TgxlConnection      ──→ TunerModel relay adjust [MAIN]
 
+HPSDR (ANAN) RX PIPELINE (HAVE_HPSDR):     ◄── TWO DEDICATED THREADS
+  Anan UDP 1024 ──→ HpsdrP2Connection          [HPSDR P2 RECV THREAD]
+                         │ iqReady [queued]
+                         ▼
+                    HpsdrDsp                   [HPSDR DSP THREAD]
+                         │  complex FFT (FFTW_FORWARD, 4096-pt, 30fps)
+                         │  NCO mix-down + FIR LPF (128-tap) + decimate (÷8)
+                         │  demodulate (USB/LSB/AM/CW)
+                         │  24kHz int16 stereo output in 960-byte chunks
+                         │
+             ┌───────────┴───────────┐
+             ▼ fftReady [queued]     ▼ pcmReady [queued]
+          [MAIN]                  [MAIN→AUDIO queued]
+    SpectrumWidget              AudioEngine
+    .feedFftBins()              .feedHpsdrAudio()
+    (spectrum display)          (QAudioSink speakers)
+
+  Control (MAIN thread):
+    HpsdrSliceModel.setFrequency() ──→ HpsdrP2Connection.setRxFrequency() [atomic]
+                                   └─→ HpsdrDsp.setRxFrequency()          [atomic]
+    HpsdrSliceModel.setMode()      ──→ HpsdrDsp.setMode()                 [main only]
+
 SPOT PIPELINES:                             ◄── SPOT WORKER THREAD
   DX Cluster (telnet)  ─┐
   RBN (telnet)         ─┤
@@ -164,6 +188,8 @@ SPOT PIPELINES:                             ◄── SPOT WORKER THREAD
 | **DXCC** | DxccColorProvider ADIF parser | ~0% | moveToThread | One-shot at startup |
 | **RADE** | RADEEngine neural encoder/decoder | ~0% | moveToThread | On-demand, HAVE_RADE |
 | **BNR** | NvidiaBnrFilter gRPC async I/O | ~0% | std::thread | GPU container, HAVE_BNR |
+| **HPSDR P2 recv** | HpsdrP2Connection, QUdpSocket, 1ms control timer | ~0.5% | QThread (m_dspThread sibling) | HAVE_HPSDR; only when Anan connected |
+| **HPSDR DSP** | HpsdrDsp, FFTW FFT, NCO/FIR/demod | ~3–5% | moveToThread (m_dspThread in HpsdrRadio) | HAVE_HPSDR; only when Anan connected |
 
 **Cross-thread signals (auto-queued):**
 - Connection → Main: statusReceived, messageReceived, commandResponse, pingRttMeasured
@@ -179,6 +205,10 @@ SPOT PIPELINES:                             ◄── SPOT WORKER THREAD
 - ExtControllers → Main: tuneSteps, buttonPressed, externalPttChanged, cwKeyChanged, paramAction
 - Main → ExtControllers: setTransmitting, loadSettings, open/close (via QMetaObject::invokeMethod)
 - CwDecoder → Main: textDecoded, statsUpdated (auto-queued)
+- HPSDR P2 recv → HPSDR DSP: iqReady (auto-queued, crosses thread boundary)
+- HPSDR DSP → Main: fftReady, pcmReady (auto-queued, forwarded by HpsdrRadio)
+- Main → HPSDR P2 recv: setRxFrequency, setSampleRate (std::atomic, lock-free)
+- Main → HPSDR DSP: setRxFrequency, setCenterFrequency (std::atomic, lock-free)
 
 **Design principle:** Everything except GUI rendering and model dispatch runs
 on a dedicated worker thread. RadioModel owns all sub-models as value members

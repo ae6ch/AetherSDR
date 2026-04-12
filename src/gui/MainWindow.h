@@ -21,6 +21,11 @@
 #ifdef HAVE_WEBSOCKETS
 #include "core/FreeDvClient.h"
 #endif
+#ifdef HAVE_HPSDR
+#include "hpsdr/HpsdrRadio.h"
+#include "hpsdr/HpsdrRadioInfo.h"
+#include <memory>
+#endif
 #include <QThread>
 #ifdef HAVE_SERIALPORT
 #include "core/SerialPortController.h"
@@ -88,6 +93,11 @@ private slots:
     void onSliceAdded(SliceModel* slice);
     void onSliceRemoved(int id);
 
+#ifdef HAVE_HPSDR
+    void onHpsdrConnectRequested(const AetherSDR::HpsdrRadioInfo& info);
+    void onHpsdrDisconnected();
+#endif
+
     // Spectrum click-to-tune
     void onFrequencyChanged(double mhz);
 
@@ -141,6 +151,9 @@ private:
     // Core objects
     RadioDiscovery    m_discovery;
     RadioModel        m_radioModel;
+#ifdef HAVE_HPSDR
+    std::unique_ptr<HpsdrRadio> m_hpsdrRadio;  // null when not connected to an Anan
+#endif
     DxccColorProvider m_dxccProvider;
     AudioEngine*      m_audio{nullptr};
     QThread*          m_audioThread{nullptr};
