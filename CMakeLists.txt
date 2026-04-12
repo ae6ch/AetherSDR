@@ -873,8 +873,9 @@ if(HAVE_PIPEWIRE)
 endif()
 
 # Pass project version to code
+set(AETHERSDR_VERSION_SUFFIX "-hpsdr")
 target_compile_definitions(AetherSDR PRIVATE
-    AETHERSDR_VERSION="${PROJECT_VERSION}"
+    AETHERSDR_VERSION="${PROJECT_VERSION}${AETHERSDR_VERSION_SUFFIX}"
 )
 
 # Compiler warnings
