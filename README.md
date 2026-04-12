@@ -25,6 +25,7 @@ AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines. 
 
 - **GPU-accelerated rendering** — QRhi waterfall + FFT spectrum on GPU (OpenGL/Metal/D3D11), 71% CPU reduction, heat map FFT display
 - **Multi-slice operation** — color-coded VFO overlays, independent TX assignment, diversity mode with ESC beamforming
+- **OpenHPSDR / Anan 10E** — experimental RX support via Protocol 1 & 2: full DSP pipeline, FFT waterfall, S-meter, CW decoder
 - **Multi-panadapter** — up to 4 pans with 6 layout options, per-pan display controls, native VITA-49 waterfall tiles
 - **Full RX/TX controls** — filter presets, AGC, DSP, EQ, mic/compression gauges, TX profiles, ATU, TUNE/MOX
 - **Client-side noise reduction** — NR2 (spectral), RN2 (RNNoise neural), BNR (NVIDIA GPU AI denoiser)
@@ -48,6 +49,27 @@ AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines. 
 ## Supported Radios
 
 Works with any FlexRadio transceiver running SmartSDR firmware v3.x or v4.x: FLEX-6400, 6400M, 6600, 6600M, 6700, 8400, 8400M, 8600, 8600M, and Aurora (AU-510, AU-520) series.
+
+### OpenHPSDR / Apache Labs Anan
+
+Experimental RX support for **Apache Labs Anan 10E** (and other OpenHPSDR-compatible hardware) via Protocol 1 (Metis) and Protocol 2. Connect, tune, demodulate (USB/LSB/AM/CW), and watch the waterfall — all from the same AetherSDR UI.
+
+| Feature | Status |
+|---------|--------|
+| UDP discovery (P1 Metis + P2) | Working |
+| IQ streaming & sample rate selection | Working |
+| DSP: NCO, FIR LPF, 8:1 decimation | Working |
+| USB / LSB / AM / CW demodulation | Working |
+| Voice bandpass filter (300 Hz – 3 kHz) | Working |
+| FFT spectrum + waterfall | Working |
+| S-meter (IQ RMS → dBm) | Working |
+| CW decoder (ggmorse, auto pitch/speed) | Working |
+| AF gain, squelch, audio pan, mute | Working |
+| Preamp / attenuator (Anan 10E RF chain) | Working |
+| TX path | Not implemented |
+| AGC | Not implemented (manual AF gain only) |
+
+See `docs/hpsdr-implementation-notes.md` for architecture details and calibration constants.
 
 ---
 

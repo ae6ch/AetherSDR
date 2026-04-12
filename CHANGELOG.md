@@ -5,9 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [v0.8.9] — 2026-04-11
 
-### Float32 Audio, Display Panel Redesign, Community PR Blitz
+### Float32 Audio, Display Panel Redesign, OpenHPSDR RX, Community PR Blitz
 
 ### New Features
+
+**OpenHPSDR / Apache Labs Anan RX support (experimental)**
+- Protocol 1 (Metis) and Protocol 2 UDP discovery and IQ streaming for Anan 10E and compatible hardware
+- Full client-side DSP pipeline: NCO mixer, 128-tap FIR LPF, 8:1 decimation (384 kHz → 48 kHz), USB/LSB/AM/CW demodulation
+- Voice bandpass biquad filter (300 Hz HP + 3 kHz LP, Direct Form II Transposed)
+- GPU-accelerated FFT waterfall and spectrum display with calibrated dBm scaling
+- S-meter: 100 ms IQ RMS accumulator → dBm, feeds existing SMeterWidget
+- CW decoder integration (ggmorse auto pitch/speed) via 2:1 stereo→mono 48→24 kHz path
+- AF gain, squelch, audio pan, mute, preamp/attenuator (Anan 10E RF chain mapping)
+- Isolated `src/hpsdr/` module — zero changes to SmartSDR code paths
 
 **Float32 audio pipeline**
 - End-to-end float32 from radio to speaker — eliminates distortion at high AF slider levels
