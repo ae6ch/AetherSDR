@@ -1400,30 +1400,32 @@ void AudioEngine::feedDecodedSpeech(const QByteArray& pcm)
 #ifdef HAVE_HPSDR
 void AudioEngine::feedHpsdrAudio(const QByteArray& pcm)
 {
-    // HpsdrDsp emits 48kHz stereo int16.  Route through m_rxBuffer so the
-    // 10 ms pull-timer handles rate control.
+    // HpsdrDsp emits 48 kHz stereo float32 — the sink's native format
+    // (QAudioFormat::Float). End-to-end float32, no conversion here.
     //
     // Sink at 48kHz (m_resampleTo48k=true on macOS/Windows): append directly.
-    // Sink at 24kHz (m_resampleTo48k=false on Linux when 24kHz is supported):
-    //   decimate 2:1 by averaging consecutive stereo frame pairs.  The FIR in
-    //   HpsdrDsp already band-limits the signal to < 21 kHz so no aliasing
-    //   occurs when halving the rate to 24kHz.
+    // Sink at 24kHz (m_resampleTo48k=false on Linux with 24kHz support):
+    //   2:1 decimate by averaging consecutive stereo frame pairs. HpsdrDsp's
+    //   FIR already band-limits to < 21 kHz so halving the rate does not alias.
     if (!m_audioSink) {
         return;
     }
     if (m_resampleTo48k) {
         m_rxBuffer.append(pcm);
     } else {
-        // 2:1 stereo int16 decimation: average each pair of consecutive frames
-        const int frames = pcm.size() / 4;  // stereo int16 = 4 bytes/frame
+        constexpr int kFloatsPerFrame = 2;   // stereo
+        constexpr int kBytesPerFrame  = kFloatsPerFrame * static_cast<int>(sizeof(float));
+        const int inFrames  = pcm.size() / kBytesPerFrame;
+        const int outFrames = inFrames / 2;
         QByteArray out;
-        out.reserve(pcm.size() / 2);
-        const qint16* src = reinterpret_cast<const qint16*>(pcm.constData());
-        for (int i = 0; i + 1 < frames; i += 2) {
-            qint16 l = static_cast<qint16>((src[i * 2 + 0] + src[(i + 1) * 2 + 0]) / 2);
-            qint16 r = static_cast<qint16>((src[i * 2 + 1] + src[(i + 1) * 2 + 1]) / 2);
-            out.append(reinterpret_cast<const char*>(&l), 2);
-            out.append(reinterpret_cast<const char*>(&r), 2);
+        out.resize(outFrames * kBytesPerFrame);
+        const float* src = reinterpret_cast<const float*>(pcm.constData());
+        float*       dst = reinterpret_cast<float*>(out.data());
+        for (int i = 0; i < outFrames; ++i) {
+            const int a = i * 2;
+            const int b = a + 1;
+            dst[i * 2 + 0] = 0.5f * (src[a * 2 + 0] + src[b * 2 + 0]);
+            dst[i * 2 + 1] = 0.5f * (src[a * 2 + 1] + src[b * 2 + 1]);
         }
         m_rxBuffer.append(out);
     }

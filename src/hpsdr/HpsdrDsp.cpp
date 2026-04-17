@@ -220,8 +220,12 @@ void HpsdrDsp::processIq(const QByteArray& raw)
     const char* p = raw.constData();
 
     for (int i = 0; i < numSamples; ++i, p += 6) {
-        const float iSam = s24beToFloat(p);
-        const float qSam = s24beToFloat(p + 3);
+        const float iSam =  s24beToFloat(p);
+        // Negate Q: HPSDR IQ convention rotates opposite to our FFT (I + jQ, FFTW_FORWARD)
+        // and opposite to our USB/LSB demod. Without this flip, the spectrum shows a
+        // mirror image of reality (signals above the tuned freq appear below it and vice
+        // versa) and USB/LSB demods swap.
+        const float qSam = -s24beToFloat(p + 3);
 
         // ── FFT path: accumulate windowed IQ into the complex FFT input buffer ──
         if (m_fftAccumPos < FFT_SIZE) {
@@ -298,7 +302,8 @@ void HpsdrDsp::processIq(const QByteArray& raw)
         audio = applyBiquad(m_hpBq, audio);
         audio = applyBiquad(m_lpBq, audio);
 
-        // 5a. AF gain: Anan 10E 24-bit IQ at noise floor ≈ 1e-5; needs ×1000 to clear int16 quantisation
+        // 5a. AF gain: Anan 10E 24-bit IQ at noise floor ≈ 1e-5 — AF slider sets
+        //     headroom; the float32 sink handles any overrange without clipping here.
         audio *= m_afGain;
 
         // 5b. Squelch: exponential-moving-average RMS; gate output when below threshold
@@ -310,21 +315,21 @@ void HpsdrDsp::processIq(const QByteArray& raw)
         // 5c. Mute
         if (m_mute) { audio = 0.0f; }
 
-        // 5. float → int16 stereo with audio pan (output at 48kHz — FIR+decimate already
-        //    band-limits to < 24 kHz so the sink's own resampler can downconvert cleanly
-        //    if needed; avoids the quality loss of an in-DSP 2-tap average).
-        //    pan: -1.0=full-L, 0=centre, +1.0=full-R (constant-power sin/cos law)
+        // 5. Native float32 stereo with audio pan at 48 kHz.  No int16 clamp —
+        //    the sink is QAudioFormat::Float, and staying in float preserves the
+        //    full ~-120 dBFS noise-floor dynamic range that int16 would quantise
+        //    away.  pan: -1.0=full-L, 0=centre, +1.0=full-R (constant-power law)
         const float angle  = (m_audioPan + 1.0f) * (kPi / 4.0f);  // [0, π/2]
         const float gainL  = std::cos(angle);
         const float gainR  = std::sin(angle);
-        qint16 sL = static_cast<qint16>(std::clamp(audio * gainL * 32767.0f, -32768.0f, 32767.0f));
-        qint16 sR = static_cast<qint16>(std::clamp(audio * gainR * 32767.0f, -32768.0f, 32767.0f));
-        m_audioOutBuf.append(reinterpret_cast<const char*>(&sL), 2);  // L channel
-        m_audioOutBuf.append(reinterpret_cast<const char*>(&sR), 2);  // R channel
+        const float sL = audio * gainL;
+        const float sR = audio * gainR;
+        m_audioOutBuf.append(reinterpret_cast<const char*>(&sL), sizeof(float));
+        m_audioOutBuf.append(reinterpret_cast<const char*>(&sR), sizeof(float));
 
-        // 6. Emit in 10 ms chunks at 48kHz stereo
-        //    48000 Hz × 10 ms × 2 ch × 2 bytes = 1920 bytes = 480 stereo frames × 4 bytes/frame
-        constexpr int kEmitBytes = 480 * 4;
+        // 6. Emit in 10 ms chunks at 48 kHz stereo float32.
+        //    48000 Hz × 10 ms × 2 ch × 4 bytes = 3840 bytes = 480 stereo frames × 8 bytes/frame
+        constexpr int kEmitBytes = 480 * 2 * static_cast<int>(sizeof(float));
         if (m_audioOutBuf.size() >= kEmitBytes) {
             emit pcmReady(m_audioOutBuf.left(kEmitBytes));
             m_audioOutBuf.remove(0, kEmitBytes);

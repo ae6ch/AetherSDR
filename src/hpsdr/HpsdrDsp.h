@@ -34,7 +34,7 @@ public slots:
 
 signals:
     void fftReady(quint64 centerHz, float bandwidthHz, QVector<float> binsDbfs);
-    void pcmReady(const QByteArray& int16Stereo48k);
+    void pcmReady(const QByteArray& float32Stereo48k);
     // Signal-level estimate (dBm, ~100 ms update rate) — drives SMeterWidget.
     // Calibration offset kCalibDbm converts raw dBFS to approximate dBm for Anan 10E.
     void levelReady(float dbm);
@@ -74,7 +74,7 @@ private:
     float          m_ncoPhase{0.0f};
     float          m_ncoPhaseInc{0.0f};
     int            m_audioAccumPos{0};
-    QByteArray     m_audioOutBuf;  // int16 stereo 48k output
+    QByteArray     m_audioOutBuf;  // float32 stereo 48k output
 
     Biquad         m_hpBq;   // voice high-pass — 300 Hz default, updated by setFilterBandwidth
     Biquad         m_lpBq;   // voice low-pass  — 3000 Hz default, tracks filter-width setting

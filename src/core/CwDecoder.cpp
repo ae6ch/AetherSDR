@@ -134,21 +134,24 @@ void CwDecoder::feedAudio48k(const QByteArray& pcm48kStereo)
 {
     if (!m_running) return;
 
-    // 2:1 stereo decimation + stereo→mono in one pass.
-    // Input: pairs of stereo int16 frames at 48kHz → output: mono int16 at 24kHz.
-    // Each output sample = average of 4 input samples (L0+R0+L1+R1) / 4.
-    const auto* src = reinterpret_cast<const int16_t*>(pcm48kStereo.constData());
-    const int stereoFrames = pcm48kStereo.size() / 4;  // one frame = L + R (4 bytes)
-    const int outSamples   = stereoFrames / 2;
-    QByteArray mono(outSamples * 2, Qt::Uninitialized);
+    // 2:1 stereo decimation + stereo→mono + float32→int16 in one pass.
+    // Input: pairs of stereo float32 frames at 48kHz → output: mono int16 at 24kHz
+    // (ggmorse's native input format). Each output sample is the mean of 4 input
+    // samples (L0+R0+L1+R1) / 4, scaled and clamped into the int16 range.
+    const auto* src = reinterpret_cast<const float*>(pcm48kStereo.constData());
+    const int floatsPerFrame = 2;  // L + R
+    const int bytesPerFrame  = floatsPerFrame * static_cast<int>(sizeof(float));
+    const int stereoFrames   = pcm48kStereo.size() / bytesPerFrame;
+    const int outSamples     = stereoFrames / 2;
+    QByteArray mono(outSamples * static_cast<int>(sizeof(int16_t)), Qt::Uninitialized);
     auto* dst = reinterpret_cast<int16_t*>(mono.data());
 
     for (int i = 0; i < outSamples; ++i) {
-        int32_t sum = static_cast<int32_t>(src[i * 4 + 0])   // L of frame i
-                    + static_cast<int32_t>(src[i * 4 + 1])   // R of frame i
-                    + static_cast<int32_t>(src[i * 4 + 2])   // L of frame i+1
-                    + static_cast<int32_t>(src[i * 4 + 3]);  // R of frame i+1
-        dst[i] = static_cast<int16_t>(sum / 4);
+        const int base = i * 4;   // 4 float samples per output int16 (2 stereo frames)
+        const float sum = src[base + 0] + src[base + 1]    // L0, R0
+                        + src[base + 2] + src[base + 3];   // L1, R1
+        const float mean = sum * 0.25f;
+        dst[i] = static_cast<int16_t>(std::clamp(mean * 32768.0f, -32768.0f, 32767.0f));
     }
 
     QMutexLocker lock(&m_bufMutex);
