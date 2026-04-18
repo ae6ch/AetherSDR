@@ -10,3 +10,6 @@ build.ps1
 CMakeFiles/
 docs/logo-original.jpg
 docs/logo_upscayl.png
+
+# Prebuilt deepfilter libraries pulled by CMake — not source, don't track.
+third_party/deepfilter/lib/
