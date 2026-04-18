@@ -1401,31 +1401,56 @@ void AudioEngine::feedDecodedSpeech(const QByteArray& pcm)
 void AudioEngine::feedHpsdrAudio(const QByteArray& pcm)
 {
     // HpsdrDsp emits 48 kHz stereo float32 — the sink's native format
-    // (QAudioFormat::Float). End-to-end float32, no conversion here.
+    // (QAudioFormat::Float).  End-to-end float32, no type conversion here.
     //
-    // Sink at 48kHz (m_resampleTo48k=true on macOS/Windows): append directly.
+    // Master volume is applied in software: on macOS with Qt's float-format
+    // QAudioSink, setVolume() is effectively a mute switch (0 vs non-zero) and
+    // intermediate values don't scale the samples.  We multiply by m_rxVolume
+    // here so the master slider actually attenuates the HPSDR audio.  The
+    // QAudioSink::setVolume() call in setRxVolume() still drives the mute path.
+    //
+    // Sink at 48kHz (m_resampleTo48k=true on macOS/Windows): 1:1 copy + gain.
     // Sink at 24kHz (m_resampleTo48k=false on Linux with 24kHz support):
     //   2:1 decimate by averaging consecutive stereo frame pairs. HpsdrDsp's
     //   FIR already band-limits to < 21 kHz so halving the rate does not alias.
     if (!m_audioSink) {
         return;
     }
+    // PC Audio off → no audio to PC speakers, same semantic as the Flex path
+    // (where the radio stops streaming). Drop the packet entirely; the sink
+    // drains the remaining buffer and goes silent.
+    if (AppSettings::instance().value("PcAudioEnabled", "True").toString() != "True") {
+        return;
+    }
+    // PC master volume only — this path drives the PC audio output.
+    // The TitleBar headphone slider drives the audio sent back to the radio
+    // in HpsdrConnection::feedTxAudio() (for the Anan's hardware headphone
+    // jack); it should not attenuate what the PC plays.
+    const float vol = m_rxVolume.load();
+    constexpr int kFloatsPerFrame = 2;   // stereo
+    constexpr int kBytesPerFrame  = kFloatsPerFrame * static_cast<int>(sizeof(float));
+    const int inFrames = pcm.size() / kBytesPerFrame;
+    const float* src   = reinterpret_cast<const float*>(pcm.constData());
+
     if (m_resampleTo48k) {
-        m_rxBuffer.append(pcm);
+        QByteArray out;
+        out.resize(inFrames * kBytesPerFrame);
+        float* dst = reinterpret_cast<float*>(out.data());
+        for (int i = 0; i < inFrames; ++i) {
+            dst[i * 2 + 0] = src[i * 2 + 0] * vol;
+            dst[i * 2 + 1] = src[i * 2 + 1] * vol;
+        }
+        m_rxBuffer.append(out);
     } else {
-        constexpr int kFloatsPerFrame = 2;   // stereo
-        constexpr int kBytesPerFrame  = kFloatsPerFrame * static_cast<int>(sizeof(float));
-        const int inFrames  = pcm.size() / kBytesPerFrame;
         const int outFrames = inFrames / 2;
         QByteArray out;
         out.resize(outFrames * kBytesPerFrame);
-        const float* src = reinterpret_cast<const float*>(pcm.constData());
-        float*       dst = reinterpret_cast<float*>(out.data());
+        float* dst = reinterpret_cast<float*>(out.data());
         for (int i = 0; i < outFrames; ++i) {
             const int a = i * 2;
             const int b = a + 1;
-            dst[i * 2 + 0] = 0.5f * (src[a * 2 + 0] + src[b * 2 + 0]);
-            dst[i * 2 + 1] = 0.5f * (src[a * 2 + 1] + src[b * 2 + 1]);
+            dst[i * 2 + 0] = 0.5f * (src[a * 2 + 0] + src[b * 2 + 0]) * vol;
+            dst[i * 2 + 1] = 0.5f * (src[a * 2 + 1] + src[b * 2 + 1]) * vol;
         }
         m_rxBuffer.append(out);
     }

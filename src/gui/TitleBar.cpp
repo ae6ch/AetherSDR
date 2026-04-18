@@ -615,6 +615,15 @@ void TitleBar::setBlinkEnabled(bool enabled)
     }
 }
 
+void TitleBar::setMasterVolumeEnabled(bool enabled)
+{
+    // Gray out the master volume slider + icon when PC Audio is disabled
+    // (its signal has nowhere useful to go in that case).
+    m_masterSlider->setEnabled(enabled);
+    m_speakerBtn->setEnabled(enabled);
+    m_masterLabel->setEnabled(enabled);
+}
+
 void TitleBar::setMinimalMode(bool on)
 {
     // Hide everything except heartbeat, logo, ↗/↙ button, and 💡

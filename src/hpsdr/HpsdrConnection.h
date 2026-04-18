@@ -40,6 +40,18 @@ public:
     virtual void setAdcDither(bool on) = 0;
     virtual void setAdcRandom(bool on) = 0;
 
+public slots:
+    // Feed demodulated audio back to the radio for its hardware outputs
+    // (speaker / headphone jack). 48 kHz stereo float32, same format as
+    // HpsdrDsp::pcmReady. Default implementation is a no-op; P1 buffers the
+    // samples and places them in outgoing EP2 packets with duplex bit set.
+    virtual void feedTxAudio(const QByteArray& /*float32Stereo48k*/) {}
+
+    // Gain applied to TX audio before it's sent to the radio (headphone jack
+    // volume on the Anan). 0.0 = silence, 1.0 = unity. Default no-op for P2.
+    virtual void setTxAudioGain(float /*gain*/) {}
+    virtual void setTxAudioMuted(bool /*muted*/) {}
+
 signals:
     // Raw 24-bit IQ samples, big-endian: 3 bytes I then 3 bytes Q per sample.
     // Mic/auxiliary bytes are already stripped; format is identical for P1 and P2.

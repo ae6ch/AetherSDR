@@ -315,15 +315,16 @@ void HpsdrDsp::processIq(const QByteArray& raw)
         // 5c. Mute
         if (m_mute) { audio = 0.0f; }
 
-        // 5. Native float32 stereo with audio pan at 48 kHz.  No int16 clamp —
-        //    the sink is QAudioFormat::Float, and staying in float preserves the
-        //    full ~-120 dBFS noise-floor dynamic range that int16 would quantise
-        //    away.  pan: -1.0=full-L, 0=centre, +1.0=full-R (constant-power law)
+        // 5. Native float32 stereo with audio pan at 48 kHz. Clamp to [-1, 1]
+        //    so QAudioSink::setVolume() (master volume) has headroom to scale
+        //    into — without the clamp, AF-overdriven samples saturate at the
+        //    DAC regardless of sink volume, and the master slider appears dead.
+        //    pan: -1.0=full-L, 0=centre, +1.0=full-R (constant-power law)
         const float angle  = (m_audioPan + 1.0f) * (kPi / 4.0f);  // [0, π/2]
         const float gainL  = std::cos(angle);
         const float gainR  = std::sin(angle);
-        const float sL = audio * gainL;
-        const float sR = audio * gainR;
+        const float sL = std::clamp(audio * gainL, -1.0f, 1.0f);
+        const float sR = std::clamp(audio * gainR, -1.0f, 1.0f);
         m_audioOutBuf.append(reinterpret_cast<const char*>(&sL), sizeof(float));
         m_audioOutBuf.append(reinterpret_cast<const char*>(&sR), sizeof(float));
 

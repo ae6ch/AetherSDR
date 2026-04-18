@@ -153,6 +153,10 @@ private:
     RadioModel        m_radioModel;
 #ifdef HAVE_HPSDR
     std::unique_ptr<HpsdrRadio> m_hpsdrRadio;  // null when not connected to an Anan
+    // TitleBar headphone slider / mute → AudioEngine HPSDR software gain stage.
+    // Only active while HPSDR is connected; disconnected on disconnect.
+    QMetaObject::Connection     m_hpsdrHpVolConn;
+    QMetaObject::Connection     m_hpsdrHpMuteConn;
 #endif
     DxccColorProvider m_dxccProvider;
     AudioEngine*      m_audio{nullptr};

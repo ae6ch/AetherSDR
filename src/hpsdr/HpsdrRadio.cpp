@@ -57,6 +57,12 @@ bool HpsdrRadio::connectToRadio(const HpsdrRadioInfo& info)
     connect(m_conn.get(), &HpsdrConnection::connectionLost,
             this,          &HpsdrRadio::onConnectionLost);
 
+    // Return demodulated audio back to the radio so it can drive its hardware
+    // speaker / headphone jack. Same float32 stream that feeds AudioEngine;
+    // conn.feedTxAudio() is a no-op on P2 until we implement it there too.
+    connect(m_dsp.get(),  &HpsdrDsp::pcmReady,
+            m_conn.get(), &HpsdrConnection::feedTxAudio);
+
     // Give the slice model access to the new connection for frequency routing.
     m_slice->setConnection(m_conn.get());
 

@@ -2,6 +2,8 @@
 #include "HpsdrP1Connection.h"
 #include "core/LogManager.h"
 #include <QNetworkDatagram>
+#include <algorithm>
+#include <cstring>
 
 namespace AetherSDR {
 
@@ -62,6 +64,86 @@ void HpsdrP1Connection::setPreamp(bool on)          { m_preamp.store(on); }
 void HpsdrP1Connection::setAttenuation(int db)      { m_attenDb.store(db); }
 void HpsdrP1Connection::setAdcDither(bool on)       { m_adcDither.store(on); }
 void HpsdrP1Connection::setAdcRandom(bool on)       { m_adcRandom.store(on); }
+
+// ── TX audio feed ────────────────────────────────────────────────────────────
+//
+// Called from the DSP thread via a queued connection. Converts 48 kHz stereo
+// float32 samples (HpsdrDsp::pcmReady format) to int16 big-endian stereo and
+// appends to m_txAudioRing. Samples drain into outgoing EP2 packets via
+// drainAudioIntoPacket() from sendControlPacket().
+
+void HpsdrP1Connection::setTxAudioGain(float gain)
+{
+    m_txAudioGain.store(std::clamp(gain, 0.0f, 1.0f));
+}
+
+void HpsdrP1Connection::setTxAudioMuted(bool muted)
+{
+    m_txAudioMuted.store(muted);
+}
+
+void HpsdrP1Connection::feedTxAudio(const QByteArray& pcm48kStereoFloat)
+{
+    constexpr int kBytesPerInFrame  = 2 * static_cast<int>(sizeof(float));   // stereo float32
+    constexpr int kBytesPerOutFrame = 2 * static_cast<int>(sizeof(qint16));  // stereo int16
+    const int frames = pcm48kStereoFloat.size() / kBytesPerInFrame;
+    if (frames <= 0) { return; }
+
+    // Apply TX audio gain + mute.  These drive the radio's hardware headphone
+    // jack volume (independent of the PC audio path's master volume).
+    const float gain = m_txAudioMuted.load() ? 0.0f : m_txAudioGain.load();
+
+    const float* src = reinterpret_cast<const float*>(pcm48kStereoFloat.constData());
+    QByteArray packed;
+    packed.resize(frames * kBytesPerOutFrame);
+    char* dst = packed.data();
+    for (int i = 0; i < frames; ++i) {
+        const float l = std::clamp(src[i * 2 + 0] * gain, -1.0f, 1.0f);
+        const float r = std::clamp(src[i * 2 + 1] * gain, -1.0f, 1.0f);
+        const qint16 li = static_cast<qint16>(l * 32767.0f);
+        const qint16 ri = static_cast<qint16>(r * 32767.0f);
+        // Big-endian pack (radio expects MSB first)
+        dst[i * 4 + 0] = static_cast<char>((li >> 8) & 0xFF);
+        dst[i * 4 + 1] = static_cast<char>( li       & 0xFF);
+        dst[i * 4 + 2] = static_cast<char>((ri >> 8) & 0xFF);
+        dst[i * 4 + 3] = static_cast<char>( ri       & 0xFF);
+    }
+
+    QMutexLocker lock(&m_txAudioMutex);
+    m_txAudioRing.append(packed);
+    // Cap buffer to bound latency. Drop oldest on overflow — prefer a small
+    // glitch to unbounded latency building up over a long session.
+    const int maxBytes = kRingCapSamples * kBytesPerOutFrame;
+    if (m_txAudioRing.size() > maxBytes) {
+        m_txAudioRing.remove(0, m_txAudioRing.size() - maxBytes);
+    }
+}
+
+// Copy up to kTxSamplesPerPkt stereo int16 samples from the ring buffer into
+// the 504-byte payload pointed to by framePayload. Each row = 8 bytes:
+//   [L_hi L_lo R_hi R_lo   ITx_hi ITx_lo QTx_hi QTx_lo]
+// We only populate the first 4 bytes (audio); leave TX IQ as zero — not transmitting.
+void HpsdrP1Connection::drainAudioIntoPacket(char* framePayload, int samplesInFrame)
+{
+    // Pull up to (samplesInFrame * 4 bytes) of packed stereo audio
+    const int wantBytes = samplesInFrame * 4;
+    QByteArray slice;
+    {
+        QMutexLocker lock(&m_txAudioMutex);
+        const int take = std::min(wantBytes, static_cast<int>(m_txAudioRing.size()));
+        slice = m_txAudioRing.left(take);
+        m_txAudioRing.remove(0, take);
+    }
+    // Interleave into the 8-byte rows (bytes 4-7 of each row stay zero for TX IQ)
+    const int available = slice.size() / 4;
+    for (int i = 0; i < available; ++i) {
+        framePayload[i * 8 + 0] = slice[i * 4 + 0];  // L_hi
+        framePayload[i * 8 + 1] = slice[i * 4 + 1];  // L_lo
+        framePayload[i * 8 + 2] = slice[i * 4 + 2];  // R_hi
+        framePayload[i * 8 + 3] = slice[i * 4 + 3];  // R_lo
+    }
+    // Any remaining rows stay all-zero from the initial packet fill → brief silence.
+}
 
 // ── Packet construction ────────────────────────────────────────────────────
 
@@ -159,6 +241,9 @@ void HpsdrP1Connection::sendControlPacket()
         case 3: c3 |= 0x60; break;  // XVTR:    11
         default: break;              // 0: follow TX (00)
     }
+    c3 |= 0x80;  // bit 7: duplex — radio plays our EP2 audio samples on its
+                 // hardware speaker / headphone jack.  Required to drive the
+                 // Anan's headphone jack; we fill the payload in drainAudioIntoPacket.
     pkt[14] = static_cast<char>(c3);  // C3
 
     // C4: TX antenna select, duplex, numRx
@@ -181,6 +266,16 @@ void HpsdrP1Connection::sendControlPacket()
     pkt[525] = static_cast<char>((freqHz >> 16) & 0xFF);
     pkt[526] = static_cast<char>((freqHz >>  8) & 0xFF);
     pkt[527] = static_cast<char>( freqHz        & 0xFF);
+
+    // ── Audio payload (host → radio hardware speaker / headphone) ───────────
+    // Each 512-byte USB frame: 8-byte C&C header + 63 sample rows × 8 bytes.
+    // Row layout: [L_hi L_lo R_hi R_lo ITx_hi ITx_lo QTx_hi QTx_lo].
+    // We populate L/R audio from the ring; TX IQ bytes stay zero (RX-only).
+    // Frame 1 payload starts at pkt[16] (8 pkt header + 8 C&C), frame 2 at pkt[528].
+    // 63 samples/frame × 2 frames = 126 samples per packet = 2.625 ms @ 48 kHz.
+    constexpr int kSamplesPerFrame = 63;
+    drainAudioIntoPacket(pkt.data() + 16,  kSamplesPerFrame);
+    drainAudioIntoPacket(pkt.data() + 528, kSamplesPerFrame);
 
     m_socket.writeDatagram(pkt, m_radioAddress, kHpsdrPort);
 }

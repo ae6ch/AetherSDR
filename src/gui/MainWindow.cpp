@@ -56,6 +56,7 @@
 #include "DspParamPopup.h"
 #ifdef HAVE_HPSDR
 #include "hpsdr/HpsdrSliceModel.h"
+#include "hpsdr/HpsdrConnection.h"
 #endif
 
 #include <memory>
@@ -1191,7 +1192,14 @@ MainWindow::MainWindow(QWidget* parent)
         } else {
             m_radioModel.removeRxAudioStream();
         }
+        // Gray out master volume when PC Audio is off — its signal has
+        // nowhere useful to go (we don't play to PC, and the Anan has no
+        // separate speaker output for us to command).
+        m_titleBar->setMasterVolumeEnabled(on);
     });
+    // Apply initial state (AppSettings default: PC Audio on).
+    m_titleBar->setMasterVolumeEnabled(
+        AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True");
     connect(m_titleBar, &TitleBar::masterVolumeChanged, this, [this](int pct) {
         bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
         if (pcAudio)
@@ -4315,6 +4323,22 @@ void MainWindow::onHpsdrConnectRequested(const AetherSDR::HpsdrRadioInfo& info)
         m_connStatusLabel->setText("Connected");
         audioStartRx();
 
+        // Bridge the TitleBar headphone slider/mute to the TX audio path so
+        // they control the volume of audio sent to the Anan's hardware
+        // headphone jack (independent of the PC master volume).
+        if (HpsdrConnection* conn = m_hpsdrRadio->connection()) {
+            conn->setTxAudioGain(m_radioModel.headphoneGain() / 100.0f);
+            conn->setTxAudioMuted(false);
+            m_hpsdrHpVolConn = connect(m_titleBar, &TitleBar::headphoneVolumeChanged,
+                                       conn,       [conn](int pct) {
+                conn->setTxAudioGain(pct / 100.0f);
+            });
+            m_hpsdrHpMuteConn = connect(m_titleBar, &TitleBar::headphoneMuteChanged,
+                                        conn,       [conn](bool muted) {
+                conn->setTxAudioMuted(muted);
+            });
+        }
+
         // Add a VFO widget and wire it up.  wireVfoWidget() gates SmartSDR-only
         // connections on hasExtendedApplet() so no radio-type ifdefs are needed.
         if (SpectrumWidget* sw = spectrum()) {
@@ -4324,6 +4348,27 @@ void MainWindow::onHpsdrConnectRequested(const AetherSDR::HpsdrRadioInfo& info)
                 wireVfoWidget(vfo, m_hpsdrRadio->sliceModel());
                 sw->setActiveVfoWidget(0);
             }
+
+            // Register the HPSDR slice with the spectrum so the VfoWidget floats
+            // at the tuned x-position (driven by m_sliceOverlays in paintEvent).
+            // The SmartSDR wire path does this via SliceModel::frequencyChanged;
+            // mirror it here since HPSDR goes through a dedicated connected handler.
+            SliceModel* hs = m_hpsdrRadio->sliceModel();
+            auto pushOverlay = [this, hs, sw]() {
+                sw->setSliceOverlay(hs->sliceId(), hs->frequency(),
+                    hs->filterLow(), hs->filterHigh(), hs->isTxSlice(),
+                    true /*active*/, hs->mode(),
+                    hs->rttyMark(), hs->rttyShift(),
+                    hs->ritOn(), hs->ritFreq(),
+                    hs->xitOn(), hs->xitFreq());
+            };
+            connect(hs, &SliceModel::frequencyChanged, this,
+                    [pushOverlay](double) { pushOverlay(); });
+            connect(hs, &SliceModel::filterChanged, this,
+                    [pushOverlay](int, int) { pushOverlay(); });
+            connect(hs, &SliceModel::modeChanged, this,
+                    [pushOverlay](const QString&) { pushOverlay(); });
+            pushOverlay();  // initial position
         }
 
         // Wire the right-side AppletPanel to the HPSDR slice.
@@ -4371,7 +4416,14 @@ void MainWindow::onHpsdrDisconnected()
     // the VFO holds a SliceModel* that belongs to m_hpsdrRadio.
     if (SpectrumWidget* sw = spectrum()) {
         sw->removeVfoWidget(0);
+        sw->removeSliceOverlay(0);
     }
+
+    // Unbridge the TitleBar headphone controls from the TX audio path.
+    // The connection object is about to be destroyed along with m_hpsdrRadio,
+    // so we don't need to reset its state — just disconnect the signals.
+    if (m_hpsdrHpVolConn)  { disconnect(m_hpsdrHpVolConn);  m_hpsdrHpVolConn  = {}; }
+    if (m_hpsdrHpMuteConn) { disconnect(m_hpsdrHpMuteConn); m_hpsdrHpMuteConn = {}; }
 
     // Unwire the HPSDR slice from AppletPanel before the radio object is destroyed.
     // The panel stays visible; SmartSDR reconnect will call setSlice() again with

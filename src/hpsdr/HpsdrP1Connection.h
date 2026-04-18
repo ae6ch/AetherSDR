@@ -32,6 +32,8 @@
 #include <QUdpSocket>
 #include <QTimer>
 #include <QHostAddress>
+#include <QMutex>
+#include <QByteArray>
 #include <atomic>
 
 namespace AetherSDR {
@@ -57,6 +59,15 @@ public:
     void setAdcDither(bool on) override;
     void setAdcRandom(bool on) override;
 
+    // ── Audio feed for the radio's hardware outputs ────────────────────────
+    // Called from the DSP thread; queued into the connection thread. Input is
+    // 48 kHz stereo float32 (same format as HpsdrDsp::pcmReady). Samples are
+    // int16-converted and appended to a ring buffer; sendControlPacket drains
+    // 126 L/R pairs per packet (two 63-sample USB frames) into the EP2 payload.
+    void feedTxAudio(const QByteArray& pcm48kStereoFloat) override;
+    void setTxAudioGain(float gain) override;
+    void setTxAudioMuted(bool muted) override;
+
 private slots:
     void onReadyRead();
     void onControlTimer();
@@ -66,10 +77,15 @@ private:
     void sendStartPacket();
     void sendStopPacket();
     void sendControlPacket();
+    void drainAudioIntoPacket(char* framePayload, int samplesInFrame);
 
-    static constexpr quint16 kHpsdrPort  = 1024;
-    static constexpr int     kControlMs  = 5;     // 200 Hz control rate
-    static constexpr int     kWatchdogMs = 3000;
+    static constexpr quint16 kHpsdrPort     = 1024;
+    // 126 samples per packet @ 48 kHz → 381 pps → 2.625 ms. Round to 3 ms;
+    // QAudioSink-paced audio production will cap the ring buffer naturally.
+    static constexpr int     kControlMs     = 3;
+    static constexpr int     kWatchdogMs    = 3000;
+    static constexpr int     kTxSamplesPerPkt = 126;          // 2 frames × 63 samples
+    static constexpr int     kRingCapSamples  = 48000 / 4;    // ~250 ms worst-case latency
 
     QUdpSocket   m_socket;
     QTimer       m_controlTimer;
@@ -86,6 +102,15 @@ private:
     std::atomic<bool>     m_adcDither{false};
     std::atomic<bool>     m_adcRandom{false};
     bool                  m_running{false};
+
+    // TX audio ring buffer (int16 L/R interleaved, big-endian-packed on insert).
+    // Accessed from DSP thread (feedTxAudio) and connection thread (sendControlPacket);
+    // guarded by m_txAudioMutex.
+    QMutex                m_txAudioMutex;
+    QByteArray            m_txAudioRing;  // packed as [L_hi L_lo R_hi R_lo] × N
+    // TX audio gain and mute — driven by TitleBar headphone slider / mute button.
+    std::atomic<float>    m_txAudioGain{1.0f};
+    std::atomic<bool>     m_txAudioMuted{false};
 };
 
 } // namespace AetherSDR

@@ -42,6 +42,11 @@ public:
     // The slice model for this radio (always valid; wired to the active connection).
     HpsdrSliceModel* sliceModel() const { return m_slice.get(); }
 
+    // The active protocol connection.  Null until connectToRadio(), null after
+    // disconnect.  Exposed so MainWindow can route TitleBar controls (e.g. the
+    // headphone slider → setTxAudioGain) at connect time.
+    HpsdrConnection* connection() const { return m_conn.get(); }
+
 signals:
     void connected();
     void disconnected();

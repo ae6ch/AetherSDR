@@ -23,6 +23,7 @@ public:
     void setPcAudioEnabled(bool on);
     void setMasterVolume(int pct);
     void setHeadphoneVolume(int pct);
+    void setMasterVolumeEnabled(bool enabled);  // gray out when PC Audio is off
     void setOtherClientTx(bool transmitting, const QString& station);
     void setMultiFlexStatus(int clientCount, const QStringList& names);
     void onHeartbeat();       // Call when a discovery packet arrives
